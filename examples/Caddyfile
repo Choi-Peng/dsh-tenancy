@@ -1,0 +1,46 @@
+{
+	auto_https off
+	admin off
+	servers {
+		trusted_proxies static private_ranges
+	}
+}
+
+:9443 {
+	bind 127.0.0.1
+
+	@adminapi path /api/settings.describe /api/settings.openDocument /api/settings.update /api/settings.replace /api/settings.mutate \
+		/api/credentials.describe /api/credentials.set /api/credentials.unset \
+		/api/agentPreset.read /api/agentPreset.copy /api/agentPreset.openDocument /api/agentPreset.remove \
+		/api/host.pickDirectory /api/host.openPath /api/llm.discoverModels
+
+	handle @adminapi {
+		forward_auth 127.0.0.1:9091 {
+			uri /auth/api/authz/forward-auth
+			copy_headers Remote-User Remote-Groups Remote-Email Remote-Name
+		}
+		reverse_proxy 127.0.0.1:3088 {
+			header_up Host localhost
+			header_up -Origin
+			header_up X-Dsh-Tenancy-Key "{env.DSH_TENANCY_SECRET}"
+			flush_interval -1
+		}
+	}
+
+	# 团队常规路径:固定公网域名(基础围栏依赖 Origin==Host;防 Host: localhost 越权)
+	handle {
+		forward_auth 127.0.0.1:9091 {
+			uri /auth/api/authz/forward-auth
+			copy_headers Remote-User Remote-Groups Remote-Email Remote-Name
+		}
+		reverse_proxy 127.0.0.1:3088 {
+			header_up Host dsh.example.com
+			header_up -Remote-User
+			header_up -Remote-Groups
+			header_up -Remote-Email
+			header_up -Remote-Name
+			header_up X-Dsh-Tenancy-Key "{env.DSH_TENANCY_SECRET}"
+			flush_interval -1
+		}
+	}
+}

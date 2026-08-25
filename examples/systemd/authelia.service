@@ -1,0 +1,19 @@
+[Unit]
+Description=Authelia SSO Portal
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=authelia
+Group=authelia
+ExecStart=/opt/authelia/authelia --config /etc/authelia/configuration.yml
+StateDirectory=authelia
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/authelia
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,18 @@
+[Unit]
+Description=Caddy (dsh auth gateway)
+After=network-online.target authelia.service
+Wants=network-online.target
+
+[Service]
+User=caddy
+Group=caddy
+EnvironmentFile=/etc/caddy/dsh.env
+ExecStart=/usr/local/bin/caddy run --config /etc/caddy/Caddyfile
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+ProtectSystem=strict
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

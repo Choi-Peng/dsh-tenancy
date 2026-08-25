@@ -1,0 +1,20 @@
+# Authelia 文件用户库 —— 模板
+# 生成口令哈希: /opt/authelia/authelia crypto hash generate argon2 --password '你的密码'
+# 修改后执行: systemctl restart authelia
+users:
+  admin:
+    disabled: false
+    displayname: "admin"
+    password: "$argon2id$v=19$m=65536,t=3,p=4$<替换为上面命令生成的哈希>"
+    email: admin@example.com
+    groups:
+      - dsh-team        # 普通成员组(访问基础功能)
+      - dsh-admins      # 管理员组(额外放开 settings./credentials. 等特权方法)
+  # 新成员模板:只加 dsh-team 即可
+  # alice:
+  #   disabled: false
+  #   displayname: "Alice"
+  #   password: "$argon2id$..."
+  #   email: alice@example.com
+  #   groups:
+  #     - dsh-team
