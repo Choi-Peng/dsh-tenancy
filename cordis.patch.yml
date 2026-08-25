@@ -1,0 +1,23 @@
+# @choi-p/dsh-tenancy — bundle patch layer
+# Mounted as the LAST profile bundle so its shadow routes register after core
+# services exist (registration order is irrelevant to matching: exact beats
+# prefix in dsh-host-webserver, but keep layering readable anyway).
+#
+# NOTE: set sharedSecret to the same value Caddy injects via
+#   header_up X-Dsh-Tenancy-Key "{env.DSH_TENANCY_SECRET}"
+# (see /etc/caddy/dsh.env). Empty string disables the secret check.
+- insert:
+    - id: tenancy
+      name: '@choi-p/dsh-tenancy'
+      config:
+        identityHeader: remote-user
+        groupsHeader: remote-groups
+        sharedSecret: ''                # 部署时必须与 /etc/caddy/dsh.env 的 DSH_TENANCY_SECRET 同值
+                                        # (本机已在 profile cordis.patch.yml 覆盖为实际密钥)
+        adminGroups:
+          - dsh-admins
+        localPrincipal: local
+        localIsAdmin: true
+        defaultAccess: private          # private | team-read | team-rw
+        hideEmptyWorkspaces: true
+        dbPath: ''                      # 空 → $DSH_HOME/tenancy/acl.json

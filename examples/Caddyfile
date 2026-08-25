@@ -35,10 +35,9 @@
 		}
 		reverse_proxy 127.0.0.1:3088 {
 			header_up Host dsh.example.com
-			header_up -Remote-User
-			header_up -Remote-Groups
-			header_up -Remote-Email
-			header_up -Remote-Name
+			# ★ 不要在这里 header_up -Remote-*:copy_headers 是覆盖语义,
+			#   认证成功后 Authelia 的真实身份会替换客户端伪造值;若在此删除,
+			#   dsh 收不到身份头,会把所有人都当 local admin(fallback 语义)。
 			header_up X-Dsh-Tenancy-Key "{env.DSH_TENANCY_SECRET}"
 			flush_interval -1
 		}
