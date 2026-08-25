@@ -19,6 +19,7 @@ need_root() { [[ $EUID -eq 0 ]] || fail "请使用 root 或 sudo 运行此脚本
 # ──────────────────────────────────────────────
 DOMAIN=""
 SKIP_BINARIES=false
+CRED_DIR="${DSH_HOME:-${HOME}/.dsh}/bootstrap-credentials"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 GITHUB_PROXY="${GITHUB_PROXY:-}"  # 国内设 https://ghproxy.net/
 ADMIN_USER="admin"
@@ -79,7 +80,7 @@ echo ""
 info "域名: ${DOMAIN}"
 info "管理员: ${ADMIN_USER}"
 if $_auto_gen_pass; then
-  info "密码: <随机生成, 完成后查看 /root/dsh-p0-credentials/admin.txt>"
+  info "密码: <随机生成, 完成后查看 ${CRED_DIR}/admin.txt>"
 else
   info "密码: <用户指定>"
 fi
@@ -309,7 +310,7 @@ USERSEOF
     ok "已写入 /etc/authelia/users.yml ($_mode)"
 
     # 保存初始凭据
-    local cred_dir="/root/dsh-p0-credentials"
+    local cred_dir="${CRED_DIR}"
     mkdir -p "$cred_dir"
     chmod 700 "$cred_dir"
     cat > "${cred_dir}/admin.txt" <<CREDEOF
@@ -592,7 +593,7 @@ run_checks() {
     ok "全部检查通过! 部署完成。"
     echo ""
     info "后续步骤:"
-    info "  1. 查看管理员凭据: cat /root/dsh-p0-credentials/admin.txt"
+    info "  1. 查看管理员凭据: cat ${CRED_DIR}/admin.txt"
     info "  2. 配置 nginx 反向代理 (见 examples/nginx/)"
     info "  3. 安装 dsh 插件: dsh plugin --profile web add @choi-p/dsh-tenancy"
     info "  4. 设置 cordis.patch.yml 中的 sharedSecret"
