@@ -1,0 +1,26 @@
+--- a/lib/index.js	2026-08-25 13:39:06.915563601 +0800
++++ b/lib/index.js	2026-08-25 13:39:19.778529790 +0800
+@@ -429,16 +429,20 @@
+ 			websocket.once("message", () => {
+ 				websocket.close(1008, "downlink only");
+ 			});
+-			const pump = this.pump(websocket, open(abort.signal), abort);
++			const principal = globalThis.__dshTenancy?.principal?.(req);
++			const pump = this.pump(websocket, open(abort.signal), abort, principal);
+ 			this.pumps.add(pump);
+ 			pump.then(() => {
+ 				this.pumps.delete(pump);
+ 			});
+ 		});
+ 	}
+-	async pump(socket, frames, abort) {
++	async pump(socket, frames, abort, principal) {
+ 		try {
+-			for await (const frame of frames) await send(socket, frame);
++			for await (const frame of frames) {
++				if (principal !== void 0 && globalThis.__dshTenancy?.filterFrame?.(principal, frame) === null) continue;
++				await send(socket, frame);
++			}
+ 		} catch (error) {
+ 			if (!abort.signal.aborted) try {
+ 				await send(socket, failureFrame(error));
