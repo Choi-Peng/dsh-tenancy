@@ -37,3 +37,11 @@ Thumbs.db
 .env
 .env.*
 !.env.example
+
+# Packaged archives
+*.tgz
+
+# to-do / notes
+TODO.md
+*.todo
+*-plan.md
