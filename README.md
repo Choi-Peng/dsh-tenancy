@@ -88,6 +88,15 @@ curl -s -o /dev/null -w "%{http_code}\n" -b /tmp/jar -X POST https://dsh.example
 2. **会话 ACL** — exact 影子路由接管会话类 RPC，按旁车存储 `$DSH_HOME/tenancy/acl.json` 的 `owner/access` 判定；`session.list/search/workspace.list` 响应按可见性过滤
 3. **管理面** — `GET/POST /tenancy/*`（whoami / sessions / claim / acl）
 4. **事件流隔离 (P2)** — 暴露同步钩子 `globalThis.__dshTenancy`，配合 [`patches/`](patches/) 在 WS downlink pump 处逐帧过滤——未授权会话**零帧**泄漏
+5. **Client UI (P3)** — 会话头「共享」按钮 + owner 徽章 + 设置页多租户卡片（[`lib/client.js`](lib/client.js)）
+6. **respond 硬化 (P3)** — 影子接管 `/api/respond`：rpcId 须命中事件帧索引且会话可写，否则 403
+7. **审计日志 (P3)** — `$DSH_HOME/tenancy/audit.log`（JSONL，5MB 轮转）：门控拒绝、ACL 变更、claim、respond 拒绝
+
+---
+
+## ⚠️ 多实例共享 $DSH_HOME 的红线
+
+同时跑多个 dsh 实例(如生产 web :3088 + 调试 web-dev :3080)时,**每个启用 tenancy 的 profile 必须配置独立的 `dbPath` / `auditPath`**,否则两进程各自缓存整份 JSON、整文件原子替换,后写者会清掉前者的 ACL 记录(已发生过一次事故)。拿不准就只在生产 profile 启用 tenancy。
 
 ---
 
@@ -156,4 +165,4 @@ systemctl restart authelia
 - [x] P0 认证前端（Caddy + Authelia 同域部署）
 - [x] P1 影子路由 + 旁车 ACL + claim 迁移 + sharedSecret + 管理面收紧
 - [x] P2 client-connection 原地补丁事件帧过滤
-- [ ] P3 client 半 UI（共享对话框 / owner 徽章）、respond 硬化、审计日志
+- [x] P3 client 半 UI（共享对话框 / owner 徽章 / 设置卡片）、respond 硬化、审计日志

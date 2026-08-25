@@ -20,4 +20,6 @@
         localIsAdmin: true
         defaultAccess: private          # private | team-read | team-rw
         hideEmptyWorkspaces: true
+        hardenRespond: true             # P3:影子接管 /api/respond 做 rpcId→会话归属校验
+        auditPath: ''                   # 空 → $DSH_HOME/tenancy/audit.log
         dbPath: ''                      # 空 → $DSH_HOME/tenancy/acl.json
