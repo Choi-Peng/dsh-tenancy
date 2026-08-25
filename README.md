@@ -1,0 +1,159 @@
+# @choi-p/dsh-tenancy
+
+DSH 单实例多租户插件 —— 配套 **Caddy + Authelia** 认证前端使用。
+
+所有用户共享全局模型 `API_KEY` 与插件运行环境，适用于成员间信任度较高的内部团队、小型工作组或亲友共享场景，不适用于需要严格资源隔离的环境。
+
+本 README 同时是整套认证前端的**部署手册**。
+
+```
+浏览器 ── TLS ──▶ nginx :443
+                    │  dsh.example.com ──▶ Caddy 127.0.0.1:9443(HTTP)
+                    │  /auth/* ─────────▶ Authelia 127.0.0.1:9091(门户)
+                    ▼
+        Caddy:forward_auth 问 Authelia → 注入 Remote-User/Groups
+               普通路径: Host 固定为公网域名
+               特权方法路径(/api/settings.* 等15个): Host→localhost + 剥 Origin
+                    ▼
+        dsh 127.0.0.1:3088 + 本插件(exact 影子路由做会话级 owner/access ACL)
+```
+
+**效果**:一次登录；普通成员只能看自己的会话；管理员在同一 URL 下 settings/credentials/模型目录全部可用。
+
+---
+
+## 快速部署
+
+```bash
+sudo bash install.sh --domain dsh.example.com
+# 可选: --admin-user <name>  --admin-password <pass>  --github-proxy https://ghproxy.net/
+```
+
+脚本自动完成全部步骤：下载二进制、生成密钥、创建管理员账号并保存凭据至 `/root/dsh-p0-credentials/admin.txt`。
+
+### 前置条件
+
+| 项 | 要求 |
+|---|---|
+| 已有 | nginx 占 443 且有可用证书的站点 |
+| 端口空闲 | `127.0.0.1:9091`(Authelia)、`127.0.0.1:9443`(Caddy)，均只绑回环 |
+| DNS/证书 | 不需要新增，复用现有域名与证书 |
+
+> 版本参考：Authelia v4.39.20、Caddy v2.11.4。
+
+---
+
+## 手动部署要点
+
+`install.sh` 会自动完成以下全部步骤。手动部署时参照 [`examples/`](examples/) 目录：
+
+1. **安装二进制** — Authelia → `/opt/authelia/`，Caddy → `/usr/local/bin/`，创建各自服务账号
+2. **部署 Authelia** — 复制 [`configuration.yml`](examples/authelia/configuration.yml) 和 [`users.yml`](examples/authelia/users.yml) 到 `/etc/authelia/`，填入随机密钥和口令哈希
+3. **部署 Caddy** — 复制 [`Caddyfile`](examples/Caddyfile) 到 `/etc/caddy/`，生成共享密钥 `DSH_TENANCY_SECRET`
+4. **接入 nginx** — 参照 [`dsh.example.com.conf`](examples/nginx/dsh.example.com.conf) 修改 vhost
+
+### Authelia 关键点 (v4.39)
+
+- 访问控制规则**顺序敏感**：admins 放行 → 同路径显式 deny → team 放行其余。缺少 deny 规则会导致非管理员穿透
+
+---
+
+## 验收清单
+
+```bash
+# ① 未认证 → 302 跳门户
+curl -s -o /dev/null -w "%{http_code}\n" https://dsh.example.com/api/host.describe
+
+# ② 登录拿 cookie
+curl -s -c /tmp/jar -X POST https://dsh.example.com/auth/api/firstfactor \
+  -H 'Content-Type: application/json' \
+  -d '{"username":"admin","password":"***","targetURL":"","requestMethod":"POST"}'
+
+# ③ 基础 RPC → 200
+curl -s -o /dev/null -w "%{http_code}\n" -b /tmp/jar -X POST https://dsh.example.com/api/host.describe \
+  -H 'Content-Type: application/json' -H "Origin: https://dsh.example.com" \
+  -d '{"type":"client-request","rpcId":"1","method":"host.describe","payload":{}}'
+
+# ④ 特权方法 → 管理员 200 / 成员 403
+curl -s -o /dev/null -w "%{http_code}\n" -b /tmp/jar -X POST https://dsh.example.com/api/settings.describe \
+  -H 'Content-Type: application/json' -H "Origin: https://dsh.example.com" \
+  -d '{"type":"client-request","rpcId":"2","method":"settings.describe","payload":{}}'
+```
+
+---
+
+## 插件职责
+
+1. **身份提取** — 读 Caddy 注入的 `Remote-User` / `Remote-Groups`；SSH 隧道直连按 `localPrincipal`（等同 admin）
+2. **会话 ACL** — exact 影子路由接管会话类 RPC，按旁车存储 `$DSH_HOME/tenancy/acl.json` 的 `owner/access` 判定；`session.list/search/workspace.list` 响应按可见性过滤
+3. **管理面** — `GET/POST /tenancy/*`（whoami / sessions / claim / acl）
+4. **事件流隔离 (P2)** — 暴露同步钩子 `globalThis.__dshTenancy`，配合 [`patches/`](patches/) 在 WS downlink pump 处逐帧过滤——未授权会话**零帧**泄漏
+
+---
+
+## 插件安装与配置
+
+```bash
+# 安装
+dsh plugin --profile web add github:choi-peng/dsh-tenancy
+
+# 事件帧过滤补丁（幂等；dsh 升级后重跑）
+bash scripts/apply-p2-patch.sh && pm2 restart dsh-web
+
+# 验收探测
+node scripts/ws-probe.mjs testmember      # 无授权 → 应为 0 帧
+node scripts/ws-probe.mjs choi            # admin → 全量
+node scripts/ws-probe.mjs local           # SSH 隧道语义 → admin
+```
+
+> `sharedSecret` 必须与 `/etc/caddy/dsh.env` 的 `DSH_TENANCY_SECRET` 一致。核对：`dsh --profile web --dump-config | less`
+
+---
+
+## 日常运维
+
+```bash
+# 生成密码哈希
+/opt/authelia/authelia crypto hash generate argon2 --password '新成员密码'
+# → $argon2id$v=19$m=65536,t=3,p=4$...
+
+# 加成员：编辑 /etc/authelia/users.yml 追加用户（password: "$argon2id$..."；groups: dsh-team；管理员额外加 dsh-admins）
+systemctl restart authelia
+```
+
+- 用户库改动后若无变化则需重启 Authelia
+- 初始凭据由 `install.sh` 生成至 `/root/dsh-p0-credentials/`（chmod 700），登录后尽快改密
+
+---
+
+## 故障排查
+
+| 症状 | 原因与解法 |
+|---|---|
+| forward_auth 全 400，Authelia 报 `insecure scheme` | Caddyfile 加 `servers { trusted_proxies static private_ranges }`，让 nginx 的 `X-Forwarded-Proto` 生效 |
+| `wrong argument count ... after '-Remote-Name'` | `header_up -X` 一行只能删一个字段，多字段拆成多行 |
+| Authelia 报 `missing host value` | forward_auth `uri` 忘了子路径前缀：应为 `/auth/api/authz/forward-auth` |
+| 非管理员也能调 settings.* | 缺少显式 deny 规则；检查规则顺序 |
+| 新用户登录失败 `does not exist` | `systemctl restart authelia` |
+| GitHub 下载超时 | 用镜像前缀 `https://ghproxy.net/` |
+
+---
+
+## 示例文件
+
+| 文件 | 说明 |
+|---|---|
+| [`examples/Caddyfile`](examples/Caddyfile) | 含 @adminapi 特权路径重写 |
+| [`examples/authelia/configuration.yml`](examples/authelia/configuration.yml) | 密钥已脱敏 |
+| [`examples/authelia/users.yml`](examples/authelia/users.yml) | 用户库模板 |
+| [`examples/nginx/dsh.example.com.conf`](examples/nginx/dsh.example.com.conf) | nginx vhost |
+| [`examples/systemd/`](examples/systemd/) | Authelia / Caddy systemd 单元 |
+
+---
+
+## 开发路线图
+
+- [x] P0 认证前端（Caddy + Authelia 同域部署）
+- [x] P1 影子路由 + 旁车 ACL + claim 迁移 + sharedSecret + 管理面收紧
+- [x] P2 client-connection 原地补丁事件帧过滤
+- [ ] P3 client 半 UI（共享对话框 / owner 徽章）、respond 硬化、审计日志
