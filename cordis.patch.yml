@@ -23,3 +23,12 @@
         hardenRespond: true             # P3:影子接管 /api/respond 做 rpcId→会话归属校验
         auditPath: ''                   # 空 → $DSH_HOME/tenancy/audit.log
         dbPath: ''                      # 空 → $DSH_HOME/tenancy/acl.json
+        memberWorkspaceRoot: '~/dsh'    # P4:非管理员成员的工作空间围栏根(支持 ~/ 展开);
+                                        # 目录浏览/建目录/建工作区/显式会话 cwd 全部围在此目录内。
+                                        # 置空则这些方法对成员回落 admin-only(旧行为)
+        registerEnabled: true           # P4:邀请码注册(/register 公开页 + /tenancy/invites*)
+        registerGroup: dsh-team         # 注册用户加入的组(绝不写 admin 组)
+        autheliaUsersPath: /etc/authelia/users.yml   # Authelia file 后端用户库(须可写)
+        autheliaBin: /opt/authelia/authelia          # 生成 argon2id 哈希的 CLI
+        invitesPath: ''                 # 空 → $DSH_HOME/tenancy/invites.json
+                                        # ⚠ 多实例共享 $DSH_HOME 时必须逐实例唯一(同 dbPath 红线)

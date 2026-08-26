@@ -519,6 +519,12 @@ deploy_dsh_plugin() {
     defaultAccess: private
     hideEmptyWorkspaces: true
     dbPath: ''
+    memberWorkspaceRoot: '~/dsh'
+    registerEnabled: true
+    registerGroup: dsh-team
+    autheliaUsersPath: /etc/authelia/users.yml
+    autheliaBin: /opt/authelia/authelia
+    invitesPath: ''
 PATCH_EOF
       ok "已写入 tenancy 配置覆盖 (sharedSecret 已同步)"
     else

@@ -27,6 +27,16 @@
 		}
 	}
 
+	# P4:邀请码注册页 —— 匿名可达(不走 forward_auth,不注入身份头/密钥;
+	# 插件侧自带每 IP 限流 + 一次性邀请码校验)
+	@register path /register /register/*
+	handle @register {
+		reverse_proxy 127.0.0.1:3088 {
+			header_up Host dsh.example.com
+			flush_interval -1
+		}
+	}
+
 	# 团队常规路径:固定公网域名(基础围栏依赖 Origin==Host;防 Host: localhost 越权)
 	handle {
 		forward_auth 127.0.0.1:9091 {
