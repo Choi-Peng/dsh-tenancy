@@ -1,0 +1,84 @@
+# 开发日志
+
+> [!NOTE]
+> 本文档由 AI 生成,可能存在错误或遗漏,使用前请 review。
+
+## 2026-08-25
+
+### P0 — 认证前端搭建
+
+- 搭建 Caddy + Authelia 认证前端，实现单实例 dsh 多人复用
+- Caddy `forward_auth` 对接 Authelia，注入 `Remote-User` / `Remote-Groups`
+- 特权路径（`settings.*` 等 15 个）Host 重写为 localhost，解除 dsh loopback 围栏
+- 编写 `install.sh` 一键部署脚本（下载二进制、生成密钥、创建管理员）
+- 凭据保存目录改为可配置的 `CRED_DIR`（默认 `/root/dsh-p0-credentials/`）
+- 添加 nginx / Caddy / Authelia / systemd 配置示例
+
+### P1 — 影子路由 + 旁车 ACL
+
+- 插件骨架 `lib/index.js`：身份提取、会话 ACL、管理面 `/tenancy/*`
+- exact 影子路由接管会话类 RPC，按 `owner/access` 判定可见性
+- `session.list/search/workspace.list` 响应按可见性过滤
+- claim 迁移存量会话（无 owner 的会话自动分配给首次访问者）
+- 启用 `sharedSecret` 校验（插件 ↔ Caddy 共享密钥）
+- `host.listDirectory/createDirectory` 收紧为 admin-only
+
+### P2 — 事件帧过滤
+
+- 编写 `dsh-client-connection` 原地补丁，在 WS downlink pump 处注入 `__dshTenancy` 钩子
+- 未授权会话零帧泄漏（含内嵌 sessionId 的 workspace/归档视图帧克隆裁剪）
+- 编写 `scripts/apply-patches.sh` 幂等应用补丁
+
+### 验收
+
+- 影子路由生效（响应头 `x-tenancy-gate`）✓
+- 密钥错误 + 伪造 Remote-User → 401 ✓
+- session.list 可见性：local admin 24 行 / choi 18 行 / testmember 0 行 ✓
+- grant reader 后 testmember 对该会话 history 200；未授权会话 403 ✓
+- WS events.mux：choi 建新会话，testmember 零帧（含内嵌 ID 扫描）✓
+
+---
+
+## 2026-08-26
+
+### P3 — Client UI、respond 硬化、审计日志
+
+- 会话头「共享」按钮 + owner 徽章
+- 设置页多租户卡片（whoami / 登出 / 邀请码管理）
+- 影子接管 `/api/respond`：rpcId 须命中事件帧索引且会话可写，否则 403
+- 审计日志 `$DSH_HOME/tenancy/audit.log`（JSONL，5MB 轮转）
+
+### P4 — 工作空间围栏、邀请码注册、登出
+
+- 成员工作空间围栏：非 `dsh-admins` 的目录浏览/新建工作区/新建会话限制在 `~/dsh` 内
+- 浏览越界静默钳制到根，写入越界 403
+- 一次性邀请码注册：`/register` 公开页 + SHA-256 存储 + authelia CLI 生成 argon2id
+- 设置卡片「登出」按钮：POST `/auth/api/logout` 销毁 Authelia 会话
+
+### P5 — 域名入口管理放行
+
+- 编写 client.js 补丁：`isLoopback` 判定追加 `/tenancy/whoami` 同步请求
+- 仅 `dsh-admins` 经域名访问时可用设置→模型/插件管理功能
+- 成员与未登录者行为零变化（fail-closed）
+
+### 工程整理
+
+- 合并 P2/P5 补丁为单个 `dsh-client-connection-*.patch`
+- 合并 `apply-p2-patch.sh` + `apply-p5-admin-domain-patch.sh` → `apply-patches.sh`
+- README 精简，去除开发相关内容
+
+### 设置面集成收尾
+
+- **tenancy settings 命名空间**：宿主注册 `tenancy` 命名空间（`registerEnabled` /
+  `memberWorkspaceRoot` / `defaultAccess` / `hideEmptyWorkspaces`，无敏感字段）。
+  设置→插件「可配置」tab 按「settings.describe 命名空间 ∩ 卡片 key」派发卡片，
+  此前因宿主不 serve `tenancy` 命名空间，多租户卡片永不显示（与 P5 无关，
+  只是此前插件设置整体不可用掩盖了它）
+- 多租户卡片改为**可折叠**，与 shell 插件卡片（PluginCard）同构：header 按钮 +
+  chevron + 默认收起
+- 「我的会话」列表由 session id 改为**会话标题**（并行 `session.list` 合并
+  `projections.values.title`；无标题显示「未命名会话」，悬停可看原始 id）
+- **nginx 修复**：新增 `location ^~ /sidebar/ws/` WebSocket 升级块——
+  此前 better-sidebar 的终端 WS 升级头被 nginx 剥掉，浏览器报
+  `WebSocket connection to 'wss://…/sidebar/ws/agent-terminals' failed`
+- 运维：空会话清理流程沉淀（见 handbooks/operations.md）

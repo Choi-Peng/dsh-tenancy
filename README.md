@@ -1,8 +1,12 @@
 # @choi-p/dsh-tenancy
 
+> [!NOTE]
+> 本文档由 AI 生成,可能存在错误或遗漏,使用前请 review 并实测。
+
 DSH 单实例多租户插件 —— 配套 **Caddy + Authelia** 认证前端使用。
 
-所有用户共享全局模型 `API_KEY` 与插件运行环境，适用于成员间信任度较高的内部团队、小型工作组或亲友共享场景，不适用于需要严格资源隔离的环境。
+所有用户共享全局模型 `API_KEY` 与插件运行环境，适用于成员间信任度较高的内部团队、
+小型工作组或亲友共享场景，不适用于需要严格资源隔离的环境。
 
 本 README 同时是整套认证前端的**部署手册**。
 
@@ -18,8 +22,6 @@ DSH 单实例多租户插件 —— 配套 **Caddy + Authelia** 认证前端使�
         dsh 127.0.0.1:3088 + 本插件(exact 影子路由做会话级 owner/access ACL)
 ```
 
-**效果**:一次登录；普通成员只能看自己的会话；管理员在同一 URL 下 settings/credentials/模型目录全部可用。
-
 ---
 
 ## 快速部署
@@ -29,7 +31,8 @@ sudo bash install.sh --domain dsh.example.com
 # 可选: --admin-user <name>  --admin-password <pass>  --github-proxy https://ghproxy.net/
 ```
 
-脚本自动完成全部步骤：下载二进制、生成密钥、创建管理员账号并保存凭据至 `/root/dsh-p0-credentials/admin.txt`。
+脚本自动完成全部步骤：下载二进制、生成密钥、创建管理员账号并保存凭据至 
+`/root/dsh-p0-credentials/admin.txt`。
 
 ### 前置条件
 
@@ -47,33 +50,45 @@ sudo bash install.sh --domain dsh.example.com
 
 `install.sh` 会自动完成以下全部步骤。手动部署时参照 [`examples/`](examples/) 目录：
 
-1. **安装二进制** — Authelia → `/opt/authelia/`，Caddy → `/usr/local/bin/`，创建各自服务账号
-2. **部署 Authelia** — 复制 [`configuration.yml`](examples/authelia/configuration.yml) 和 [`users.yml`](examples/authelia/users.yml) 到 `/etc/authelia/`，填入随机密钥和口令哈希
-3. **部署 Caddy** — 复制 [`Caddyfile`](examples/Caddyfile) 到 `/etc/caddy/`，生成共享密钥 `DSH_TENANCY_SECRET`
-4. **接入 nginx** — 参照 [`dsh.example.com.conf`](examples/nginx/dsh.example.com.conf) 修改 vhost
+1. **安装二进制** — Authelia → `/opt/authelia/`，Caddy → `/usr/local/bin/`，
+    创建各自服务账号
+2. **部署 Authelia** — 复制 [`configuration.yml`](examples/authelia/configuration.yml) 
+    和 [`users.yml`](examples/authelia/users.yml) 到 `/etc/authelia/`，
+    填入随机密钥和口令哈希
+3. **部署 Caddy** — 复制 [`Caddyfile`](examples/Caddyfile) 到 `/etc/caddy/`，
+    生成共享密钥 `DSH_TENANCY_SECRET`
+4. **接入 nginx** — 参照 [`dsh.example.com.conf`](examples/nginx/dsh.example.com.conf) 
+    修改 vhost
 
 ### Authelia 关键点 (v4.39)
 
-- 访问控制规则**顺序敏感**：admins 放行 → 同路径显式 deny → team 放行其余。缺少 deny 规则会导致非管理员穿透
+- 访问控制规则**顺序敏感**：admins 放行 → 同路径显式 deny → team 放行其余。
+  缺少 deny 规则会导致非管理员穿透
 
 ---
 
 ## 插件功能
 
-1. **身份提取** — 读 Caddy 注入的 `Remote-User` / `Remote-Groups`；SSH 隧道直连按本地管理员处理
-2. **会话 ACL** — 影子路由接管会话类 RPC，按 `owner/access` 判定可见性；`session.list/search/workspace.list` 响应自动过滤
+1. **身份提取** — 读 Caddy 注入的 `Remote-User` / `Remote-Groups`；
+    SSH 隧道直连按本地管理员处理
+2. **会话 ACL** — 影子路由接管会话类 RPC，按 `owner/access` 判定可见性；
+    `session.list/search/workspace.list` 响应自动过滤
 3. **事件流隔离** — WebSocket 下行逐帧过滤，未授权会话**零帧**泄漏
 4. **管理面** — `/tenancy/*` 提供 whoami / sessions / claim / acl / invites 接口
 5. **Client UI** — 会话头「共享」按钮 + owner 徽章 + 设置页多租户卡片（含登出）
-6. **工作空间围栏** — 非管理员的目录浏览、新建工作区、新建会话全部限制在 `~/dsh`（可配）内；浏览越界静默钳制到根，写入越界 403
+6. **工作空间围栏** — 非管理员的目录浏览、新建工作区、新建会话全部限制在 `~/dsh`（可配）内；
+    浏览越界静默钳制到根，写入越界 403
 7. **邀请码注册** — 管理员生成一次性邀请码，新成员通过 `/register` 自助注册
-8. **审计日志** — `$DSH_HOME/tenancy/audit.log`（JSONL，5MB 轮转）记录门控拒绝、ACL 变更等
+8. **审计日志** — `$DSH_HOME/tenancy/audit.log`（JSONL，5MB 轮转）记录门控拒绝、
+    ACL 变更等
 
 ---
 
 ## ⚠️ 多实例共享 $DSH_HOME 的红线
 
-同时跑多个 dsh 实例时，**每个启用 tenancy 的 profile 必须配置独立的 `dbPath` / `auditPath` / `invitesPath`**，否则后写者会清掉前者的 ACL/邀请码记录。拿不准就只在生产 profile 启用 tenancy。
+同时跑多个 dsh 实例时，**每个启用 tenancy 的 profile 必须配置独立的 `dbPath` / 
+`auditPath` / `invitesPath`**，否则后写者会清掉前者的 ACL/邀请码记录。
+拿不准就只在生产 profile 启用 tenancy。
 
 ---
 
@@ -87,7 +102,8 @@ dsh plugin --profile web add github:choi-peng/dsh-tenancy
 bash scripts/apply-patches.sh && pm2 restart dsh-web
 ```
 
-> `sharedSecret` 必须与 `/etc/caddy/dsh.env` 的 `DSH_TENANCY_SECRET` 一致。核对：`dsh --profile web --dump-config | less`
+> `sharedSecret` 必须与 `/etc/caddy/dsh.env` 的 `DSH_TENANCY_SECRET` 一致。
+> 核对：`dsh --profile web --dump-config | less`
 
 ---
 
@@ -103,7 +119,8 @@ systemctl restart authelia
 ```
 
 - 用户库改动后若无变化则需重启 Authelia
-- 初始凭据由 `install.sh` 生成至 `/root/dsh-p0-credentials/`（chmod 700），登录后尽快改密
+- 初始凭据由 `install.sh` 生成至 `/root/dsh-p0-credentials/`（chmod 700），
+  登录后尽快改密
 
 ---
 

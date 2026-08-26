@@ -26,6 +26,9 @@
     "examples",
     "patches",
     "scripts",
+    "docs",
+    "handbooks",
+    "CHANGELOG.md",
     "README.md"
   ],
   "peerDependencies": {
