@@ -82,3 +82,25 @@
   此前 better-sidebar 的终端 WS 升级头被 nginx 剥掉，浏览器报
   `WebSocket connection to 'wss://…/sidebar/ws/agent-terminals' failed`
 - 运维：空会话清理流程沉淀（见 handbooks/operations.md）
+
+### P4 后续 — 注册页与门户微调
+
+- `/register` 成功分支改为**自动 continue**：展示「注册成功!正在前往登录…」约 1.2s
+  后自动跳转 `/auth/?rd=%2F`（`location.replace`，后退键不回到已消费邀请码的表单页；
+  跳转前提交按钮保持禁用防重复提交），移除手动「Continue/去登录」链接
+- Authelia 门户「邀请码注册」入口从 nginx 悬浮按钮（sub_filter 注入）迁入登录表单：
+  重置密码行左侧（等长二进制补丁，见 `tools/authelia_register_link_patch.py`
+  与 `tools/README.md`）
+- **修复注册密码哈希截断**：`hashArgon2` 提取正则字符类漏了逗号，
+  `$argon2id$v=19$m=65536,t=3,p=4$…$…` 在首个逗号处被截断入库（登录必败）；
+  改为严格匹配完整 argon2 编码（参数段+盐段+摘要段）。受影响的存量测试账号
+  （inviteduser / inviteduser2）已从 users.yml 清除（备份在 `.dsh-repair/`），
+  需用新邀请码重新注册
+- **修复注册用户登录失败（第二层根因）**：Authelia v4.39 的
+  `authentication_backend.file.watch` 默认 `false`，注册直写 users.yml 后
+  Authelia 感知不到新增用户 → 登录报 "Incorrect username or password"。
+  已在 `/etc/authelia/configuration.yml` 显式开启 `watch: true`，追加/删除
+  用户均验证动态重载生效（探针用户免重启即登录、删除后立即失效）
+- 运维红线记录：两个 yml 属主必须保持 `authelia:authelia`
+  （configuration.yml 0600 / users.yml 644）；root 编辑后若属主变为 root，
+  服务用户读不了配置会陷入重启循环

@@ -26,9 +26,14 @@ vim /etc/authelia/users.yml
 #       - dsh-team           # 普通成员
 #       # - dsh-admins       # 管理员额外加此组
 
-# 3. 重启 Authelia（若文件监听未自动重载）
+# 3. 重启 Authelia（已配置 authentication_backend.file.watch: true，
+#    保存后自动动态重载，通常无需重启；仅当 watch 失效时才需要）
 systemctl restart authelia
 ```
+
+> ⚠️ 属主/权限红线:`/etc/authelia/configuration.yml` 为 `authelia:authelia 0600`,
+> `/etc/authelia/users.yml` 为 `authelia:authelia 644`。以 root 编辑后务必确认
+> 属主未被改为 root(否则服务用户读不了配置,会陷入重启循环)。
 
 ### 邀请码注册（自助）
 
