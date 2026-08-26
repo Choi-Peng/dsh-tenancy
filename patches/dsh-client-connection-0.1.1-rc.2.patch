@@ -1,5 +1,5 @@
---- a/lib/index.js	2026-08-25 13:39:06.915563601 +0800
-+++ b/lib/index.js	2026-08-25 13:39:19.778529790 +0800
+--- a/lib/index.js
++++ b/lib/index.js
 @@ -429,16 +429,20 @@
  			websocket.once("message", () => {
  				websocket.close(1008, "downlink only");
@@ -24,3 +24,14 @@
  		} catch (error) {
  			if (!abort.signal.aborted) try {
  				await send(socket, failureFrame(error));
+--- a/lib/client.js
++++ b/lib/client.js
+@@ -10279,7 +10279,7 @@
+ 			};
+ 			const handle = {
+ 				api,
+-				isLoopback: pageLocation === void 0 || isLoopbackHostname(pageLocation.hostname),
++				isLoopback: pageLocation === void 0 || isLoopbackHostname(pageLocation.hostname) || /* [dsh-tenancy P5] 域名入口管理放行:同步问一次 /tenancy/whoami,仅 tenancy 报告 admin(即 Authelia 组含 dsh-admins)才视为可信;tenancy 未装/非 admin/请求失败一律 fail-closed,成员行为不变 */ (() => { try { if (typeof XMLHttpRequest === "undefined") return false; const xhr = new XMLHttpRequest(); xhr.open("GET", "/tenancy/whoami", false); xhr.send(null); return xhr.status === 200 && JSON.parse(xhr.responseText).admin === true; } catch { return false; } })(),
+ 				hostDescription: {
+ 					getSnapshot: () => description,
+ 					subscribe: (listener) => {
