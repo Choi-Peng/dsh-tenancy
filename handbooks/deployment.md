@@ -101,6 +101,13 @@ openssl rand -hex 32   # → identity_validation.reset_password.jwt_secret
 - 子路径挂载写进 `server.address: 'tcp://127.0.0.1:9091/auth'`（旧 `server.path` 已废弃）
 - 访问控制规则**顺序敏感**：admins 放行 → 同路径显式 deny → team 放行其余。
   **缺少 deny 规则会导致非管理员穿透**
+- 启用邀请码注册时必须有 `authentication_backend.file.watch: true`（模板已含），
+  否则追加进 `users.yml` 的新用户不会热重载 —— 注册返回成功但登录必败
+- 权限：`configuration.yml`（含三个密钥）`600`、`users.yml`（含哈希/邮箱）`o-r`；
+  收权前先确认 dsh 进程跑在哪个用户下（见 `operations.md`「确认 dsh 进程用户」），
+  root 恒可写；非 root 用户需 `chmod g+w users.yml` + `usermod -aG authelia <dsh用户>`
+  并**完全重启该服务**（补充组只在进程启动时读取）；加组结果可用
+  `groups authelia` 复核
 
 ### 3. 部署 Caddy
 
@@ -175,6 +182,10 @@ dsh plugin --profile web add github:choi-peng/dsh-tenancy
   config:
     sharedSecret: '与 /etc/caddy/dsh.env 中 DSH_TENANCY_SECRET 同值'
 ```
+
+> 该值非空后，**未带 `X-Dsh-Tenancy-Key` 的请求一律 401**（不再回落 local 管理员），
+> SSH 隧道直连 `127.0.0.1:3088` 需自行补上该头。留空仅限可信内网调试，
+> 且插件启动时会打 WARN（空密钥 + `localIsAdmin: true` = 本机任意进程可得 admin）。
 
 核对配置：
 

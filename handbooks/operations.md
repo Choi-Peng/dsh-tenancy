@@ -64,6 +64,15 @@ curl -b cookie -X POST https://dsh.example.com/tenancy/invites \
 
 ## 会话 ACL 管理
 
+> **直连 loopback 的 curl 需要先备好共享密钥**：`sharedSecret` 非空后，不带
+> `X-Dsh-Tenancy-Key` 的请求一律 401（不再回落 local 管理员）。本章以及「清理空
+> 会话」里的 `127.0.0.1:3088` 示例统一假定已在当前 shell 执行过：
+>
+> ```bash
+> KEY=$(grep -oP '(?<=DSH_TENANCY_SECRET=).*' /etc/caddy/dsh.env)
+> alias tcurl="curl -H \"x-dsh-tenancy-key: $KEY\""   # 本机 root 操作视为 local admin
+> ```
+
 ### 查看 ACL
 
 ```bash
@@ -120,8 +129,9 @@ dsh 没有会话删除 API（只有归档 `workspace.archiveSession`）。清理
 ### 1. 找出空会话
 
 ```bash
-# blank:true = 从未使用过的会话（无标题、无消息）
+# blank:true = 从未使用过的会话（无标题、无消息）；$KEY 见章首「会话 ACL 管理」说明
 curl -s -X POST http://127.0.0.1:3088/api/session.list \
+  -H "x-dsh-tenancy-key: $KEY" \
   -H 'content-type: application/json' \
   -d '{"type":"client-request","rpcId":"t1","method":"session.list","payload":{}}' \
   | jq -r '.result.value.items[] | select(.blank==true) | .sessionId' > /tmp/blank-ids.txt
@@ -176,6 +186,7 @@ fs.renameSync(file+".tmp",file);
 ```bash
 # 重启后
 curl -s -X POST http://127.0.0.1:3088/api/session.list \
+  -H "x-dsh-tenancy-key: $KEY" \
   -H 'content-type: application/json' \
   -d '{"type":"client-request","rpcId":"t1","method":"session.list","payload":{}}' \
   | jq '.result.value.items | length'    # 应等于非空会话数
@@ -318,6 +329,7 @@ localhost/[::1]/127.x）。经域名访问时：
 
 ```bash
 curl -s -X POST http://127.0.0.1:3088/api/settings.describe \
+  -H "x-dsh-tenancy-key: $KEY" \
   -H 'content-type: application/json' \
   -d '{"type":"client-request","rpcId":"t1","method":"settings.describe","payload":{}}' \
   | jq -r '.result.value.namespaces[].ns' | grep -x tenancy
@@ -329,6 +341,10 @@ curl -s -X POST http://127.0.0.1:3088/api/settings.describe \
 能直通 /api。对本部署（dsh 仅绑 127.0.0.1、全部流量经 nginx→Caddy→Authelia
 认证）是预期信任模型，每进程只打一次，无害。
 
+> 但 tenancy 自己的影子路由不走核心那道围栏，所以它自己的 `sharedSecret` 是
+> 真正的硬边界：**必须配置且与 Caddy 注入值一致**，否则本机任意进程不带任何头
+> 即为 local admin（插件启动时的 WARN 日志就是在提醒这件事）。
+
 ### 控制台 `GET /api/update/status → 403`
 
 remote-web-ui 的更新检查端点，其自身设备配对围栏拒绝域名来源。仅影响更新提示
@@ -339,6 +355,33 @@ remote-web-ui 的更新检查端点，其自身设备配对围栏拒绝域名来
 tenancy 对无 ACL 记录的存量会话返回 404（`no-acl-record`）。owner 徽章因此隐藏、
 共享框显示「该会话还没有共享记录」——正常行为；管理员可 `POST /tenancy/claim`
 补记录。
+
+### 确认 dsh 进程用户（改权限前必做）
+
+邀请码注册是 dsh 进程自己 `O_APPEND` 写 `/etc/authelia/users.yml`，所以收权前必须
+先搞清那个进程的身份。判靠**端口反查 pid**（pm2 元数据、`ps` 里的名字都不可靠）：
+
+```bash
+pid=$(ss -tlnp | grep -oP ':3088\s.*pid=\K[0-9]+' | head -1)   # 换成你的实际端口
+grep -E '^(Uid|Gid|Groups)' /proc/$pid/status                    # Uid 全 0 = root，恒可写
+ps -o pid,user,uid,group,gid,supg -p $pid
+tr '\0' '\n' < /proc/$pid/environ | grep -E '^(HOME|USER|DSH_HOME)='  # 确认旁车文件落在哪
+```
+
+- **root**（常见于开发机、`sudo` 拉起）：`chmod o-r` 不影响写入，直接收权即可。
+- **非 root 专用用户**：先 `chmod g+w /etc/authelia/users.yml`（644→660）并
+  `usermod -aG authelia <dsh用户>`，再收权；随后**重启 dsh 服务**（补充组只在进程
+  启动时读取）。
+- 多实例时每个端口都要查一遗（如 `web :3088` 与 `web-dev :3080` 是两个不同用户/
+  不同 `DSH_HOME` 的进程）；`/etc/authelia` 目录保持 755 即可，追加写不需要目录写权限。
+
+### 控制台 `403 — tenancy: workspace not owned by you`
+
+成员在不属于自己的工作区（旁车 `acl.json` 里没有 owner 记录，或 owner 是别人）
+里新建会话被拒。围栏会把会话 cwd 对齐到目标工作区 path，因此这类工作区必须
+先由管理员 `POST /tenancy/claim` 思路处理（工作区维度目前无 claim 端点）或
+由 owner 本人用 `workspace.create` 重新登记。若团队确实需要共享工作区，优先
+改成会话级共享（`POST /tenancy/sessions/<id>/acl` 的 `team-read/team-rw`）。
 
 ---
 

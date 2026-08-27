@@ -55,6 +55,12 @@ dsh 本身是单用户设计，tenancy 插件通过以下机制实现多租户�
 从 Caddy 注入的 `Remote-User` / `Remote-Groups` 头提取已验证身份（principal）。
 SSH 隧道直连（无注入头）按 `localPrincipal` 处理（默认等同 admin）。
 
+> [!NOTE]
+> 信任边界：`sharedSecret` 非空时，`X-Dsh-Tenancy-Key` **必须存在且匹配**（恒定时间
+> 比较）——缺失同样返回 401 而不再回落 local 主体，否则抹掉该头即可取得 local
+> admin。`sharedSecret` 为空 = 任何能直连本端口的调用方都是 admin，仅限可信内网
+> 调试；这种组合下插件启动会打 WARN 日志。
+
 #### 影子路由
 
 以 `exact` 路由注册 30+ 个会话类 RPC（`/api/session.create`、`/api/session.list` 等），
@@ -90,11 +96,16 @@ SSH 隧道直连（无注入头）按 `localPrincipal` 处理（默认等同 adm
 - 浏览越界/缺省 → 静默钳制到根（看不到根外任何内容）
 - 写入越界 → 403
 - 词法 + 符号链接双重校验
+- 围栏根本身经 `realpath` 归一（`~/dsh -> /` 这类配置不会把整个文件系统变成「根内」）
+- `session.create` 不带 cwd 但带 `workspaceId` 时也判围栏：上游会把会话 cwd 对齐到
+  目标工作区 path，因此非 admin 只允许在自己名下（旁车已登记 owner）的工作区建会话
 
 #### 邀请码注册
 
 `/register` 公开页 + 一次性邀请码（SHA-256 存储、持文件锁消费），经 authelia CLI 
-生成 argon2id 哈希后 O_APPEND 写入 `users.yml`（inode 不变，Authelia 文件监听自动重载）。
+生成 argon2id 哈希后 O_APPEND 写入 `users.yml`（inode 不变，Authelia 文件监听自动重载，
+因此 `authentication_backend.file.watch` 必须为 `true`）。注册限流以 `X-Real-IP`（nginx 
+追加，不可被客户端伪造值污染）为键，回退到 socket 地址；IP 桶数量有上限，防假 IP 洪水撑爆内存。
 
 #### 设置面集成
 

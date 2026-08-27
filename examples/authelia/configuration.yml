@@ -7,6 +7,10 @@ log:
 authentication_backend:
   file:
     path: /etc/authelia/users.yml
+    # ★ 多租户注册依赖此项:dsh-tenancy 以 O_APPEND 追加 users.yml(保 inode),
+    #   Authelia 只有开了文件监听才会热重载新用户。默认 false!
+    #   缺这一行 = 注册返回成功但登录必败,管理员多半会去手改本文件(高危)。
+    watch: true
 
 session:
   name: 'authelia_session'

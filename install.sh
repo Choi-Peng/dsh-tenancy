@@ -258,6 +258,8 @@ deploy_authelia() {
     done
     sed -i "s|dsh.example.com|${DOMAIN}|g" "$tmp"
     mv "$tmp" /etc/authelia/configuration.yml
+    # 本文件含 session.secret / storage.encryption_key / jwt_secret,不得世界可读
+    chmod 600 /etc/authelia/configuration.yml
     _changed=true
     ok "已写入 /etc/authelia/configuration.yml (三个密钥独立随机)"
   fi
@@ -315,7 +317,7 @@ USERSEOF
     chmod 700 "$cred_dir"
     cat > "${cred_dir}/admin.txt" <<CREDEOF
 # DSH 初始管理员凭据 — 由 install.sh 生成于 $(date -Iseconds)
-# 登录后请尽快修改密码
+# 登录后请尽快修改密码(本文件权限 600,但所在目录属 dsh 用户,root 可读)
 username: ${ADMIN_USER}
 password: ${ADMIN_PASSWORD}
 email:    ${ADMIN_EMAIL}
@@ -340,6 +342,10 @@ CREDEOF
     ok "authelia.service 无变化, 跳过"
   fi
 
+  # users.yml 带 Argon2 哈希与邮箱,configuration.yml 带会话/存储密钥:
+  # 两者都不得世界可读(umask 可能让新建文件落到 644)
+  [[ -f /etc/authelia/configuration.yml ]] && chmod o-r /etc/authelia/configuration.yml || true
+  [[ -f /etc/authelia/users.yml ]] && chmod o-r /etc/authelia/users.yml || true
   chown -R authelia:authelia /etc/authelia /var/lib/authelia
 
   # 校验(失败即中止, 绝不带病重启)

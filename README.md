@@ -102,7 +102,9 @@ dsh plugin --profile web add github:choi-peng/dsh-tenancy
 bash scripts/apply-patches.sh && pm2 restart dsh-web
 ```
 
-> `sharedSecret` 必须与 `/etc/caddy/dsh.env` 的 `DSH_TENANCY_SECRET` 一致。
+> `sharedSecret` 必须与 `/etc/caddy/dsh.env` 的 `DSH_TENANCY_SECRET` 一致。配好后，
+> 未携带 `X-Dsh-Tenancy-Key` 的请求会被直接 401（不再回落为 local 管理员）；
+> 留空则任何能直连 `127.0.0.1:3088` 的进程都是 admin，**不得用于生产**。
 > 核对：`dsh --profile web --dump-config | less`
 
 ---

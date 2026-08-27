@@ -6,6 +6,7 @@
 //   ② 注册字段校验 + users.yml 文本工具
 //   ③ InviteStore + registerUser 完整事务(argon2 哈希用真实 authelia CLI;
 //      users.yml 写入临时目录,绝不触碰 /etc/authelia)
+//   ④ 安全边界回归:围栏根 realpath 归一 + 注册限流键/内存上限
 // 用法:node scripts/selftest.mjs [--skip-slow](跳过 argon2 实测)
 
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync, symlinkSync, realpathSync } from 'node:fs';
@@ -13,7 +14,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { confineToRoot, expandHomeDir, safeSegment, checkUsername, checkPassword, checkEmail,
   sanitizeYamlScalar, normalizeInviteCode, usersYmlHasUser, buildUserBlock } from '../lib/util.js';
-import { InviteStore, registerUser } from '../lib/register.js';
+import { InviteStore, registerUser, rateLimitCheck, clientIpOf } from '../lib/register.js';
 import { AuditLog } from '../lib/audit.js';
 
 let passed = 0;
@@ -131,6 +132,35 @@ console.log('③ 邀请码存储与注册事务');
     const block = buildUserBlock('dave', 'Dave', '', '$argon2id$k', 'dsh-team');
     assert(block.startsWith('\n  dave:\n') && block.includes('    groups:\n      - dsh-team') && !block.includes('email'), 'buildUserBlock 结构正确(email 空则省略)');
   }
+
+  rmSync(dir, { recursive: true, force: true });
+}
+
+//#endregion
+
+//#region ④ 安全边界回归
+
+console.log('④ 安全边界回归');
+{
+  const dir = mkdtempSync(join(tmpdir(), 'tenancy-selftest-root-'));
+  mkdirSync(join(dir, 'real'), { recursive: true });
+  symlinkSync(join(dir, 'real'), join(dir, 'link'));
+
+  // 围栏根必须 realpath 归一:否则 `~/dsh -> /` 这类配置会把整个文件系统当作「根内」
+  assert(expandHomeDir(join(dir, 'link')) === realpathSync(join(dir, 'real')), '围栏根经符号链接时归一为真实路径');
+  assert(expandHomeDir(join(dir, 'not-exist-yet')) === join(dir, 'not-exist-yet'), '目录尚不存在时退回词法路径(mkdir 后由启动流程二次归一)');
+  assert(expandHomeDir('~/x', realpathSync(dir)) === join(realpathSync(dir), 'x'), '~/ 展开仍可用(目标不存在时保持词法路径)');
+
+  // 限流键绝不取客户端可控的 XFF 最左值(每次换一个就能绕过)
+  const spoof = clientIpOf({ headers: { 'x-forwarded-for': '1.2.3.4, 5.6.7.8' }, socket: { remoteAddress: '127.0.0.1' } });
+  assert(spoof === '127.0.0.1', 'clientIpOf 不信 XFF 最左值,回退 socket 地址');
+  assert(clientIpOf({ headers: { 'x-real-ip': '9.9.9.9' }, socket: { remoteAddress: '127.0.0.1' } }) === '9.9.9.9', 'clientIpOf 取 nginx 追加的 X-Real-IP');
+
+  const t0 = 1_700_000_000_000;
+  let allowed = 0;
+  for (let i = 0; i < 30; i += 1) if (rateLimitCheck('203.0.113.7', t0 + i)) allowed += 1;
+  assert(allowed === 10, `同一 IP 窗口内限 10 次(实际 ${allowed})`);
+  assert(rateLimitCheck('203.0.113.8', t0) === true, '其他 IP 不受影响');
 
   rmSync(dir, { recursive: true, force: true });
 }
