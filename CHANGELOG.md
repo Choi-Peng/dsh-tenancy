@@ -104,3 +104,29 @@
 - 运维红线记录：两个 yml 属主必须保持 `authelia:authelia`
   （configuration.yml 0600 / users.yml 644）；root 编辑后若属主变为 root，
   服务用户读不了配置会陷入重启循环
+
+## 2026-08-27
+### P6 — 工作区 owner 隔离
+
+- `workspace.create` 成功后旁车登记 owner（`acl.json` 的 `workspaces` 表，
+  采纳已有目录返回已存在记录时绝不覆盖既有 owner）；`workspace.delete` 同步清理
+- `workspace.list` 对非 admin 仅返回本人创建的工作区；无旁车记录的存量工作区
+  fail-closed 仅 admin 可见（与存量会话同策略）
+- WS 帧同步收紧：`workspace-changed` 视图帧非己有整帧丢弃，
+  `workspace-removed` / `workspace-order-changed` 帧仅保留己有工作区引用
+- `hideEmptyWorkspaces` 收敛为 admin 视角：己有工作区即使为空也保留
+  （成员侧“非己有即隐藏”已无条件生效）
+
+### 验收
+
+- 成员 choi 建新工作区 → 仅自己可见；testmember 的 workspace.list 不含
+  choi 的工作区（含 sessionIds 全量裁剪）✓
+- WS 帧：choi 建工作区，testmember 零 workspace-changed 帧（含内嵌 ID 扫描）✓
+- admin 全量可见不受影响；存量无记录工作区仅 admin 可见 ✓
+
+### Bug 修复
+
+- **修复 workspace.list 过滤失效**：实测 RPC 响应信封为
+  `{ result: { value: { items: [...], archivedSessionIds: [...] } } }`，
+  原代码只检查 `value.workspaces` / `value.rows`，漏了 `value.items`，
+  导致过滤逻辑命中空数组、所有工作区原样返回。已补全 `value.items` 分支。
