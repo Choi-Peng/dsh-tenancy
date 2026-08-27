@@ -124,6 +124,22 @@
 - WS 帧：choi 建工作区，testmember 零 workspace-changed 帧（含内嵌 ID 扫描）✓
 - admin 全量可见不受影响；存量无记录工作区仅 admin 可见 ✓
 
+### P7 — 延迟 ACL 登记 + 无对话会话清理
+
+- `session.create` / `session.fork` 成功后不再立即写 `acl.json`，改为暂存到
+  纯内存 `pendingSessions` 表；首次 `session.prompt`（真实对话开始）时才落盘
+  登记 ACL，审计动作从 `acl.register` 拆为 `acl.pending`（创建时）+
+  `acl.register`（首 prompt 时）
+- 恢复路径：插件重启/升级后 `pendingSessions` 丢失，首次 `session.prompt`
+  命中未在 ACL 中的会话时按当前 principal 补登记（审计标记 `recovery`）
+- fork 子会话继承父 access 时同时查 `pendingSessions` 兜底（父可能也在
+  pending 中尚未首 prompt）
+- 无对话会话扫盘清理：启动 1 分钟后首次执行，之后每 6 小时扫描
+  `$DSH_HOME/sessions` 下所有 project/session 目录，删除满足「mtime > 1 天
+  且 `session.jsonl` 无真实对话（≤1 行或不存在）」的会话文件夹；删除前清理
+  `pendingSessions` 残留条目，审计记录 `session.cleanup`
+- 清理使用并发锁（`cleanupRunning`）避免重叠执行，effect 销毁时清除定时器
+
 ### Bug 修复
 
 - **修复 workspace.list 过滤失效**：实测 RPC 响应信封为
