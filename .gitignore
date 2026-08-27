@@ -45,3 +45,6 @@ Thumbs.db
 TODO.md
 *.todo
 *-plan.md
+
+# AI tool generated
+.qoder/

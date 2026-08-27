@@ -176,16 +176,12 @@ NEW_VERSION=$(node -p "require('$TARGET/package.json').version")
 cp $TARGET/lib/index.js $TARGET/lib/index.js.orig
 cp $TARGET/lib/client.js $TARGET/lib/client.js.orig
 
-# 3. 手动应用 P2 补丁到 index.js
+# 3. 手动应用补丁到 index.js
 #    编辑 $TARGET/lib/index.js，按 patches/ 下的补丁内容修改
-#    关键变更：
-#    - 在 websocket 升级处添加: const principal = globalThis.__dshTenancy?.principal?.(req);
-#    - pump 方法签名增加 principal 参数
-#    - pump 循环内添加 filterFrame 调用
 
-# 4. 手动应用 P5 补丁到 client.js
+# 4. 手动应用补丁到 client.js
 #    编辑 $TARGET/lib/client.js，找到 isLoopback 判定行
-#    在 isLoopbackHostname(pageLocation.hostname) 后追加 || /* [dsh-tenancy P5] */ (() => {...})()
+#    在 isLoopbackHostname(pageLocation.hostname) 后追加 || (() => {...})()
 
 # 5. 生成新补丁
 (
@@ -212,11 +208,9 @@ pm2 restart dsh-web
 ### 验证补丁
 
 ```bash
-# 检查 P2
-grep -q "__dshTenancy" $TARGET/lib/index.js && echo "P2 OK" || echo "P2 MISSING"
-
-# 检查 P5
-grep -q "dsh-tenancy P5" $TARGET/lib/client.js && echo "P5 OK" || echo "P5 MISSING"
+# 检查补丁
+grep -q "__dshTenancy" $TARGET/lib/index.js && echo "index.js OK" || echo "index.js MISSING"
+grep -q "dsh-tenancy" $TARGET/lib/client.js && echo "client.js OK" || echo "client.js MISSING"
 ```
 
 ---
@@ -265,8 +259,7 @@ pm2 restart dsh-web
 | Caddy 配置 | `/usr/local/bin/caddy validate --config /etc/caddy/Caddyfile` |
 | nginx 配置 | `nginx -t`；`nginx -T \| grep -c '/sidebar/ws/'`（升级/迁移后确认 WS 升级块仍在） |
 | dsh 运行 | `pm2 status dsh-web` |
-| 补丁 P2 已应用 | `grep -q __dshTenancy $TARGET/lib/index.js` |
-| 补丁 P5 已应用 | `grep -q 'dsh-tenancy P5' $TARGET/lib/client.js` |
+| 补丁已应用 | `grep -q __dshTenancy $TARGET/lib/index.js` |
 | 插件已加载 | `curl -b cookie https://dsh.example.com/tenancy/whoami` |
 | 登录正常 | 浏览器打开 `https://dsh.example.com` |
 | 成员隔离 | 成员只能看到自己的会话 |

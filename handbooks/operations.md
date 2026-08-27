@@ -92,6 +92,10 @@ curl -b cookie -X POST https://dsh.example.com/tenancy/sessions/<sessionId>/acl 
 - `team-read` — 团队成员可读
 - `team-rw` — 团队成员可读写
 
+> **延迟登记**：`session.create` 时不写 ACL，首次 `session.prompt`（真实对话）
+> 才落盘。因此新创建但未发消息的会话，在 `GET /tenancy/sessions` 中不可见（无 ACL
+> 记录），属正常行为。发首条消息后自动出现。
+
 ### 批量 claim 存量会话
 
 首次部署时，存量会话无 ACL 记录。管理员可批量 claim：
@@ -105,6 +109,10 @@ curl -b cookie -X POST https://dsh.example.com/tenancy/claim \
 ---
 
 ## 清理空会话
+
+  > **自动清理已生效**：插件每 6 小时自动扫描 `$DSH_HOME/sessions/`，
+  > 删除 **1 天前 + 无对话**（`session.jsonl` 仅有 header 行）的会话文件夹。
+  > 日常运维无需手动执行本章节；以下手动流程仅作补充或紧急修复使用。
 
 dsh 没有会话删除 API（只有归档 `workspace.archiveSession`）。清理「空会话」
 （`blank: true`、无任何消息）需三步：删目录 → 清 ACL → 清 workspace 索引。
@@ -205,13 +213,15 @@ curl -b cookie -X POST https://dsh.example.com/tenancy/invites/revoke \
 | action | 含义 |
 |---|---|
 | `gate.deny` | 门控拒绝（密钥错误 / admin-only / 不可读 / 不可写） |
-| `acl.register` | 会话创建/fork 时自动登记 ACL |
+| `acl.register` | 首次 `session.prompt` 时登记 ACL |
+| `acl.pending` | `session.create`/`session.fork` 成功，暂存到内存等待首 prompt |
 | `acl.set` | 手动修改 ACL |
 | `acl.claim` | 批量 claim 存量会话 |
 | `acl.deny` | ACL 操作被拒绝 |
 | `invite.create` | 生成邀请码 |
 | `invite.revoke` | 撤销邀请码 |
 | `respond.deny` | respond 硬化拒绝 |
+| `session.cleanup` | 自动扫盘删除无对话会话文件夹 |
 
 ### 查看日志
 
@@ -296,7 +306,7 @@ dsh 配置面（模型/插件/凭证设置）默认仅限**回环浏览器**（h
 localhost/[::1]/127.x）。经域名访问时：
 
 - 非 admin：维持该提示（fail-closed，设计如此）
-- admin：需已应用 P5 补丁（`bash scripts/apply-patches.sh`）并硬刷新，
+- admin：需已应用补丁（`bash scripts/apply-patches.sh`）并硬刷新，
   才会发起 `/tenancy/whoami` 解锁配置面
 
 ### 设置→插件里看不到「多租户」卡片

@@ -62,7 +62,7 @@ SSH 隧道直连（无注入头）按 `localPrincipal` 处理（默认等同 adm
 
 1. 身份提取 + 密钥校验
 2. admin-only 方法检查
-3. 成员路径围栏（P4）
+3. 成员路径围栏
 4. 会话可读/可写权限检查
 5. 转发至上游（`toFetchHandler(apiProxy)`）
 6. 响应过滤（`session.list/search/workspace.list` 按可见性裁剪）
@@ -73,30 +73,30 @@ SSH 隧道直连（无注入头）按 `localPrincipal` 处理（默认等同 adm
 原子写 + 文件锁保护。不修改 dsh 的会话文件格式（JSONL 头部是白名单序列化，
 自定义字段会被丢弃）。
 
-#### 事件帧过滤（P2）
+#### 事件帧过滤
 
 通过 `globalThis.__dshTenancy` 钩子暴露同步接口（`principal` / `filterFrame`），
 配合 `patches/` 下的补丁在 client-connection 的 WebSocket downlink pump 处逐帧过滤。
 未授权会话零帧泄漏，包括内嵌 sessionId 的 workspace/归档视图帧也会被克隆裁剪。
 
-#### respond 硬化（P3）
+#### respond 硬化
 
 影子接管 `/api/respond`：rpcId 须命中事件帧索引（FIFO 4096 + 24h TTL）且会话对
 主体可写，否则 403。
 
-#### 成员工作空间围栏（P4）
+#### 成员工作空间围栏
 
 非 `dsh-admins` 成员的目录浏览、建目录、建工作区、显式会话 cwd 全部限制在 `memberWorkspaceRoot`（默认 `~/dsh`）内：
 - 浏览越界/缺省 → 静默钳制到根（看不到根外任何内容）
 - 写入越界 → 403
 - 词法 + 符号链接双重校验
 
-#### 邀请码注册（P4）
+#### 邀请码注册
 
 `/register` 公开页 + 一次性邀请码（SHA-256 存储、持文件锁消费），经 authelia CLI 
 生成 argon2id 哈希后 O_APPEND 写入 `users.yml`（inode 不变，Authelia 文件监听自动重载）。
 
-#### 设置面集成（P5）
+#### 设置面集成
 
 设置→插件「可配置」tab 的派发机制是**两个账本的交集**：
 `settings.describe` 提供的命名空间 ∩ 卡片注册的 `key`（`dsh-client-ui-settings-plugins`
@@ -110,6 +110,16 @@ SSH 隧道直连（无注入头）按 `localPrincipal` 处理（默认等同 adm
   我的会话（按 `session.list` 的 `projections.values.title` 显示标题）/ 邀请码管理
 - 设置服务缺失时注册回调不执行，插件其余功能不受影响（同 deepseek-balance 语义）
 
+#### 延迟 ACL 登记 + 无对话会话清理
+
+  - **延迟登记**：`session.create` / `session.fork` 成功后不立即写 `acl.json`，
+    首次 `session.prompt`（真实对话开始）时才落盘。只点 new session 不发消息的
+    会话不产生 ACL 记录。
+  - **无对话扫盘**：定期扫描 `$DSH_HOME/sessions/`，删除同时满足「目录 mtime
+    > 1 天」且「`session.jsonl` 仅有 header 行（无事件）」的会话文件夹。
+    清理间隔 6 小时，首次延迟 1 分钟启动。
+  - fork 子会话继承父 access 时同时查 ACL store 和待注册表（父可能也尚未首 prompt）。
+
 ## 安全模型
 
 ### 纵深防御层次
@@ -120,7 +130,7 @@ SSH 隧道直连（无注入头）按 `localPrincipal` 处理（默认等同 adm
 | L2 — 认证 | Authelia 二因素 | 身份真实性 |
 | L3 — 头完整性 | Caddy `X-Dsh-Tenancy-Key` 共享密钥 | 防止绕过代理直接伪造 Remote-User |
 | L4 — 特权路径 | Caddy Host→localhost 重写 + Authelia deny | 非管理员无法触达 settings/credentials |
-| L5 — 客户端围栏 | dsh `isLoopback` 判定 + P5 补丁 | 域名浏览器默认不可见配置面；P5 仅对 `dsh-admins` 放行 |
+| L5 — 客户端围栏 | dsh `isLoopback` 判定 + 补丁 | 域名浏览器默认不可见配置面；仅对 `dsh-admins` 放行 |
 | L6 — 应用 ACL | tenancy 影子路由 + 旁车存储 | 会话级 owner/access 隔离 |
 | L7 — 事件流 | WS pump 逐帧过滤 | 未授权会话零帧泄漏 |
 | L8 — respond | rpcId 索引 + writable 校验 | 防止跨会话 respond |
@@ -145,7 +155,7 @@ SSH 隧道直连（无注入头）按 `localPrincipal` 处理（默认等同 adm
 
 ```
 浏览器 → nginx → Caddy → dsh WS 升级
-  → P2 补丁: principal(req) 记录主体
+  → 补丁: principal(req) 记录主体
   → downlink pump 循环: filterFrame(principal, frame) 逐帧过滤
   → 仅放行帧到达浏览器
 ```

@@ -212,7 +212,7 @@ bash scripts/apply-patches.sh && pm2 restart dsh-web
 | Caddy 启动失败 | 运行 `caddy validate` 检查 Caddyfile |
 | 登录后跳不回 dsh | 检查 nginx 的 `proxy_set_header Host` 是否正确 |
 | 浏览器报 `WebSocket …/sidebar/ws/agent-terminals failed` | nginx 缺 `/sidebar/ws/` 升级 location（见「接入 nginx」） |
-| 设置页报 `settings are unavailable in this browser` | 经域名访问且非 admin：dsh 配置面仅限回环/P5 放行；管理员需已应用 P5 补丁 |
+| 设置页报 `settings are unavailable in this browser` | 经域名访问且非 admin：dsh 配置面仅限回环/补丁放行；管理员需已应用补丁 |
 | 插件不生效 | 确认 `sharedSecret` 一致、补丁已应用、dsh 已重启 |
 
 详细故障排查见 [README](../README.md#故障排查)。
