@@ -16,6 +16,7 @@ pids
 # Coverage / testing
 coverage/
 .nyc_output/
+.selftest-tmp/
 
 # Build / dist artifacts
 dist/
@@ -48,3 +49,5 @@ TODO.md
 
 # AI tool generated
 .qoder/
+# Python 缓存
+__pycache__/

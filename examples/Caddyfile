@@ -2,17 +2,23 @@
 	auto_https off
 	admin off
 	servers {
-		trusted_proxies static private_ranges
+		# 只信本机 nginx 追加的 X-Forwarded-*。private_ranges 会把整个内网段当作可信代理
+		# (同网段任何人都能伪造 XFF/X-Forwarded-Proto 污染注册限流键与协议判定)。
+		# nginx 不在本机时,把它的 IP 逐个列进来,别放开网段。
+		trusted_proxies static 127.0.0.0/8
 	}
 }
+
+# ★ 特权方法路径:这一条正则是**唯一权威**,必须与 Authelia configuration.yml 里
+#   admins 放行 + 其余 deny 的两条 resources 正则逐字符一致(已按全匹配形式对齐:
+#   Caddy 的 path_regexp 要求整段匹配,故结尾带 .*$;Authelia 锚定开头,结尾天然不限)。
+#   改一边不改另一边 = 权限漂移(要么成员拿到 Host: localhost 的特权调用,要么管理员被 403)。
+#   升级 dsh 后若核心新增特权方法,同步这一处 + Authelia 那一处,并跑 handbooks/upgrade.md 的验收。
 
 :9443 {
 	bind 127.0.0.1
 
-	@adminapi path /api/settings.describe /api/settings.openDocument /api/settings.update /api/settings.replace /api/settings.mutate \
-		/api/credentials.describe /api/credentials.set /api/credentials.unset \
-		/api/agentPreset.read /api/agentPreset.copy /api/agentPreset.openDocument /api/agentPreset.remove \
-		/api/host.pickDirectory /api/host.openPath /api/llm.discoverModels
+	@adminapi path_regexp adminapi ^/api/(settings\.|credentials\.|agentPreset\.(read|copy|openDocument|remove)|host\.(pickDirectory|openPath)|llm\.discoverModels).*$
 
 	handle @adminapi {
 		forward_auth 127.0.0.1:9091 {
@@ -27,12 +33,16 @@
 		}
 	}
 
-	# P4:邀请码注册页 —— 匿名可达(不走 forward_auth,不注入身份头/密钥;
-	# 插件侧自带每 IP 限流 + 一次性邀请码校验)
+	# P4:邀请码注册页 —— 匿名可达(不走 forward_auth,不注入身份头;
+	# 插件侧自带每 IP 限流 + 一次性邀请码校验 + browser-trust 围栏)。
+	# 密钥照样注入:插件用它证明"这请求经过了 Caddy",不是来自直连 3088 的伪造方。
 	@register path /register /register/*
 	handle @register {
 		reverse_proxy 127.0.0.1:3088 {
 			header_up Host dsh.example.com
+			header_up -X-Forwarded-For
+			header_up -X-Real-IP
+			header_up X-Dsh-Tenancy-Key "{env.DSH_TENANCY_SECRET}"
 			flush_interval -1
 		}
 	}

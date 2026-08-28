@@ -518,6 +518,8 @@ deploy_dsh_plugin() {
     identityHeader: remote-user
     groupsHeader: remote-groups
     sharedSecret: '${tenancy_secret}'
+    trustedHosts:
+      - ${DOMAIN}
     adminGroups:
       - dsh-admins
     localPrincipal: local
@@ -593,6 +595,24 @@ run_checks() {
     pass=$((pass + 1))
   else
     warn "④ Authelia 未监听 :9091"
+  fi
+
+  # ⑤ 特权方法清单两边一致 (Caddy @adminapi 正则 == Authelia resources 正则)
+  total=$((total + 1))
+  local caddy_pat="" authelia_pat=""
+  [[ -f /etc/caddy/Caddyfile ]] \
+    && caddy_pat="$(grep -oP '@adminapi path_regexp adminapi \K.*' /etc/caddy/Caddyfile | head -1 | sed 's|\.\*\$||')"
+  [[ -f /etc/authelia/configuration.yml ]] \
+    && authelia_pat="$(grep -oP "^\s+- '\K\^/api/[^']*(?=')" /etc/authelia/configuration.yml | head -1)"
+  if [[ -z "$caddy_pat" || -z "$authelia_pat" ]]; then
+    warn "⑤ 未能从两处配置提取特权方法正则 (Caddy='${caddy_pat:-空}' Authelia='${authelia_pat:-空}'), 请手查两处是否同步"
+  elif [[ "$caddy_pat" == "$authelia_pat" ]]; then
+    ok "⑤ 特权方法清单 Caddy ↔ Authelia 一致"
+    pass=$((pass + 1))
+  else
+    warn "⑤ 特权方法清单不一致! 存在越权/误拒风险"
+    warn "     Caddy:    ${caddy_pat}"
+    warn "     Authelia: ${authelia_pat}"
   fi
 
   echo ""

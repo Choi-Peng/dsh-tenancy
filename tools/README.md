@@ -42,3 +42,25 @@ systemctl stop authelia && install -m755 /tmp/authelia.patched /opt/authelia/aut
 - `/opt/authelia/authelia` = 补丁后二进制(sha256 前 16 位 `dc3cfd77705961da`);
 - 本目录 `../authelia.tgz` 已同步为补丁后制品;
 - nginx `/auth/` location 的悬浮按钮 sub_filter 注入已移除。
+
+## check-privileged-sync.py
+
+**作用**: 核对**特权方法清单的三处同步** —— 核心 `dsh-client-connection` 里的
+`PRIVILEGED_METHODS`、`Caddyfile` 的 `@adminapi path_regexp`、`Authelia configuration.yml`
+的两条 `resources` 正则。
+
+**为何需要**: 特权方法不被本插件影子接管,只靠「Caddy 对这些路径把 Host 重写为
+localhost」+「Authelia 只放 admins 组进这些路径」两道配置保护。三份清单各自维护,
+核心升级新增特权方法而另两处未跟 = 该方法在团队入口被当普通方法放行。
+
+```bash
+python3 tools/check-privileged-sync.py                       # 开发仓库内直接跑（默认 examples/*）
+python3 tools/check-privileged-sync.py \                     # 部署机
+  --core-file "$DSH_HOME/profiles/node_modules/@deepseek-ai/dsh-client-connection/lib/index.js" \
+  --caddyfile /etc/caddy/Caddyfile --authelia /etc/authelia/configuration.yml
+# 退出码 0=一致, 1=漂移（打印缺失/多余的方法名）
+```
+
+实现只解析本项目正则的实际形状(字面量 + `\.` + 最多两层分组),命名空间整体授权
+(`settings\.`)展开为 `settings.*`;不做通用正则求解。`install.sh` 验收项⑤ 只比对
+Caddy ↔ Authelia 两处,核心侧必须用本脚本。

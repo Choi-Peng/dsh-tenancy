@@ -69,6 +69,30 @@ bash scripts/apply-patches.sh
 pm2 restart dsh-web
 ```
 
+### ★ 升级后必做：核对特权方法清单三处同步
+
+核心 `PRIVILEGED_METHODS`、Caddyfile 的 `@adminapi` 正则、Authelia 的 `resources` 正则
+是三份独立维护的清单：核心新增特权方法而另两处未跟，就会出现在“非 loopback
+围栏”下被调用的特权能力（或反之，管理员被误拒）。一周期对一次：
+
+```bash
+# 在三份清单任一所在仓库根目录跑（开发时），或显式指定安装位置
+python3 tools/check-privileged-sync.py \
+  --core-file "$DSH_HOME/profiles/node_modules/@deepseek-ai/dsh-client-connection/lib/index.js" \
+  --caddyfile /etc/caddy/Caddyfile --authelia /etc/authelia/configuration.yml
+# 退出码 0 = 三处一致; 1 = 漂移（会打印「缺失=[...]」与「多余=[...]」）
+```
+
+脚本只解析本项目正则的实际形状（字面量 + `\.` + 最多两层分组），命名空间整体
+授权（如 `settings\.`）展开为 `settings.*` 后覆盖该空下的所有方法。实测两个方向
+都能报出来：核心新增 `host.openTerminal` → 三侧「缺失」; Caddy 多列
+`host.legacyDialog` → 「多余」。
+
+> 上机实测（dsh 0.1.1-rc.2）：核心 15 个，与现有正则完全匹配。若报漂移，
+> 立即把缺失的方法名补进 Caddyfile 正则与 Authelia 两条 resources（三处逐字符一致），
+> 然后 `caddy validate` + `authelia validate-config` 再重启。`install.sh` 的验收项⑤
+> 只做 Caddy ↔ Authelia 两处比对（它拿不到核心安装路径），核心侧用上面的脚本。
+
 ### 补丁不匹配
 
 若 `apply-patches.sh` 报 `补丁不匹配` 或产生 `.rej` 文件，说明上游代码已漂移，

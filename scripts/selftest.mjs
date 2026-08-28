@@ -6,14 +6,15 @@
 //   ② 注册字段校验 + users.yml 文本工具
 //   ③ InviteStore + registerUser 完整事务(argon2 哈希用真实 authelia CLI;
 //      users.yml 写入临时目录,绝不触碰 /etc/authelia)
-//   ④ 安全边界回归:围栏根 realpath 归一 + 注册限流键/内存上限
+//   ④ 安全边界回归:围栏根 realpath 归一 + 注册限流键/内存上限 + browser-trust 围栏
 // 用法:node scripts/selftest.mjs [--skip-slow](跳过 argon2 实测)
 
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync, symlinkSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { confineToRoot, expandHomeDir, safeSegment, checkUsername, checkPassword, checkEmail,
-  sanitizeYamlScalar, normalizeInviteCode, usersYmlHasUser, buildUserBlock } from '../lib/util.js';
+  sanitizeYamlScalar, normalizeInviteCode, usersYmlHasUser, buildUserBlock,
+  isTrustedApiRequest, isLoopbackHost, safeDecode } from '../lib/util.js';
 import { InviteStore, registerUser, rateLimitCheck, clientIpOf } from '../lib/register.js';
 import { AuditLog } from '../lib/audit.js';
 
@@ -161,6 +162,37 @@ console.log('④ 安全边界回归');
   for (let i = 0; i < 30; i += 1) if (rateLimitCheck('203.0.113.7', t0 + i)) allowed += 1;
   assert(allowed === 10, `同一 IP 窗口内限 10 次(实际 ${allowed})`);
   assert(rateLimitCheck('203.0.113.8', t0) === true, '其他 IP 不受影响');
+
+  // browser-trust 围栏(影子路由自己的那道):挡 DNS rebinding 与跨站请求
+  const TH = new Set(['dsh.example.com']);
+  const trust = (host, extra = {}) => isTrustedApiRequest({ ...(host === null ? {} : { host }), ...extra }, TH);
+  assert(trust('localhost:3088') === true, 'loopback Host 可信(Caddy 重写的特权路径)');
+  assert(trust('127.0.0.1') === true && trust('[::1]:3088') === true, 'IPv4/IPv6 loopback 均可信');
+  assert(trust('dsh.example.com', { origin: 'https://dsh.example.com' }) === true, '可信域名 + 同源 Origin');
+  assert(trust('dsh.example.com:8443', { origin: 'https://dsh.example.com:8443' }) === true, '带端口条目同源可信');
+  assert(trust('dsh.example.com', { origin: 'https://evil.test' }) === false, 'Origin 与 Host 不同源 → 拒');
+  assert(trust('attacker.example', { origin: 'http://attacker.example' }) === false, 'Host 不在可信列表 → 拒(同源也不行)');
+  assert(trust('evil.test', { 'sec-fetch-site': 'cross-site' }) === false, 'sec-fetch-site: cross-site → 拒');
+  assert(trust(null) === false && trust('') === false && trust('exa mple') === false, '缺 Host / 不可解析 Host → 拒');
+  assert(isLoopbackHost('LOCALHOST') === true && isLoopbackHost('127.8.9.1') === true && isLoopbackHost('example.com') === false, 'isLoopbackHost 判定');
+  assert(safeDecode('%zz') === null && safeDecode('a%20b') === 'a b', 'safeDecode 容错畸形转义(不致 500)');
+
+  // 围栏根是指向根外目录的符号链接时的回归。结论修正:confineToRoot 的 within(real)
+  // 本来就会拒掉「符号链接根 + 真实前缀」的组合,所以根是指向盘符的链接时**不会**
+  // 逃逸文件系统;但成员按真实路径发请求会被全部误拒(可用性缺陷),错误消息还会
+  // 泄露未解析的词法根。归一后两者都对:真实前缀放行,根外路径仍拒。
+  const d2 = mkdtempSync(join(tmpdir(), 'tenancy-selftest-f3-'));
+  mkdirSync(join(d2, 'outside'), { recursive: true });
+  mkdirSync(join(d2, 'pool'), { recursive: true });
+  symlinkSync(join(d2, 'outside'), join(d2, 'pool', 'fence'));
+  const lexicalRoot = join(d2, 'pool', 'fence');
+  const realRoot = expandHomeDir(lexicalRoot); // 插件现在使用的归一根
+  assert(realRoot === realpathSync(join(d2, 'outside')) && realRoot !== lexicalRoot, '围栏根解析到符号链接目标(与词法根不同)');
+  assert(confineToRoot(lexicalRoot, join(lexicalRoot, 'etc')) === null, '词法根下根外真实路径被误拒(旧行为:符号链接根破坏可用性)');
+  assert(confineToRoot(realRoot, join(realRoot, 'etc')) === join(realRoot, 'etc'), '归一根下同一语义路径正常放行');
+  assert(confineToRoot(realRoot, join(realRoot, '..')) === null, '归一根后根外路径仍然被拒');
+  assert(confineToRoot(realRoot, join(lexicalRoot, 'sub')) === null, '符号链接前缀被词法判定拒绝(安全方向)');
+  rmSync(d2, { recursive: true, force: true });
 
   rmSync(dir, { recursive: true, force: true });
 }

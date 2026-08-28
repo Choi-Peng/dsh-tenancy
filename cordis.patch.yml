@@ -14,6 +14,10 @@
         groupsHeader: remote-groups
         sharedSecret: ''                # 部署时必须与 /etc/caddy/dsh.env 的 DSH_TENANCY_SECRET 同值
                                         # (本机已在 profile cordis.patch.yml 覆盖为实际密钥)
+                                        # ⚠ 非空后未带 X-Dsh-Tenancy-Key 的请求一律 401（不再回落 local）
+        trustedHosts: []                # 公网域名必填，如 ['dsh.example.com']：影子路由自己的
+                                        # browser-trust 围栏用它判定 Host 是否可信（loopback 永远可信）；
+                                        # 缺省时 /register 与域名直入的 /tenancy/* 会被 403（启动时打 WARN）
         adminGroups:
           - dsh-admins
         localPrincipal: local

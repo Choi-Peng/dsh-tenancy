@@ -103,6 +103,11 @@ openssl rand -hex 32   # → identity_validation.reset_password.jwt_secret
   **缺少 deny 规则会导致非管理员穿透**
 - 启用邀请码注册时必须有 `authentication_backend.file.watch: true`（模板已含），
   否则追加进 `users.yml` 的新用户不会热重载 —— 注册返回成功但登录必败
+- 二因素（`policy: two_factor`）**不依赖邮件**：可选方法只有 TOTP / WebAuthn / Duo，
+  注册在门户完成、密钥加密存进 SQLite；模板已给 `totp.issuer` 并启用 `webauthn`。
+  前提是服务器时钟准确（`timedatectl show-timesync --property=NTPSynchronized`）。
+  注：规则里的 `methods:` 是 HTTP 方法过滤器，不是认证方式白名单（写错会被
+  `validate-config` 直接拒）
 - 权限：`configuration.yml`（含三个密钥）`600`、`users.yml`（含哈希/邮箱）`o-r`；
   收权前先确认 dsh 进程跑在哪个用户下（见 `operations.md`「确认 dsh 进程用户」），
   root 恒可写；非 root 用户需 `chmod g+w users.yml` + `usermod -aG authelia <dsh用户>`
@@ -191,6 +196,26 @@ dsh plugin --profile web add github:choi-peng/dsh-tenancy
 
 ```bash
 dsh --profile web --dump-config | grep sharedSecret
+```
+
+### 2b. 配置 trustedHosts（围栏判定用）
+
+影子路由自己有一道 browser-trust 围栏（Host 必须是 loopback 或本列表条目、Origin
+同源、`sec-fetch-site` 非 cross-site）。经 Caddy 的常规流量 Host 被固定为公网域名，
+所以**必须把域名声明进来**，否则 `/register` 与域名直入的 `/tenancy/*` 全被 403：
+
+```yaml
+    trustedHosts:
+      - 'dsh.example.com'
+```
+
+验收（应看到 `untrusted request origin` 而不是页正常返回）：
+
+```bash
+curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:3088/register/ -H 'Host: attacker.example'
+# 期望 403
+curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:3088/register/ -H "Host: dsh.example.com"
+# 期望 200
 ```
 
 ### 3. 应用补丁

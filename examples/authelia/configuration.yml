@@ -31,6 +31,22 @@ identity_validation:
   reset_password:
     jwt_secret: '<openssl rand -hex 32>'
 
+# ── 第二因素 ──
+# 不需要 SMTP!Authelia 的二因素只有 TOTP / WebAuthn / Duo 三种，没有一个
+# 依赖邮件：注册在门户完成，密钥加密存进 storage 的 SQLite（encryption_key 已配）。
+# 邮箱只用于「密码重置链接」与告警通知，本项目用 filesystem notifier 兼容无邮件环境。
+totp:
+  issuer: 'dsh.example.com'   # 出现在验证器 App 里的名字；不带端口
+  # 其余参数（period 30 / digits 6 / algorithm sha1 / secret_size 32）用默认值，
+  # 默认组合兼容性最好；改动只影响新注册的密钥。
+
+webauthn:
+  # 启用后，成员可在门户 https://dsh.example.com/auth/ 自行注册通行密钥/安全密钥
+  # （平台认证器如 Touch ID / Windows Hello 即可用），拿到真正的 possession 因子。
+  # 前提：门户经 TLS 真实域名访问（本部署经 nginx 满足）。
+  disable: false
+  display_name: 'DSH'
+
 notifier:
   filesystem:
     filename: '/var/lib/authelia/notification.txt'
@@ -38,18 +54,24 @@ notifier:
 access_control:
   default_policy: deny
   rules:
-    # 1) 特权方法路径:dsh-admins 放行(Caddy 对这些路径做 Host→localhost 重写)
+    # 1) 特权方法路径：dsh-admins 必须过二因素后放行（Caddy 对这些路径做 Host→localhost 重写）。
+    #    resources 正则与 examples/Caddyfile 的 @adminapi 是同一份，**两处必须同步**。
     - domain: 'dsh.example.com'
       subject: ['group:dsh-admins']
       resources:
         - '^/api/(settings\.|credentials\.|agentPreset\.(read|copy|openDocument|remove)|host\.(pickDirectory|openPath)|llm\.discoverModels)'
       policy: two_factor
-    # 2) 同一批路径:其余任何人(含其他认证用户)显式拒绝 —— 必须在 team 规则之前!
+    # 2) 同一批路径：其余任何人（含其他认证用户）显式拒绝 —— 必须在 team 规则之前！
+    #    缺这条 = 普通成员能碰 settings./credentials. 等特权方法。
     - domain: 'dsh.example.com'
       resources:
         - '^/api/(settings\.|credentials\.|agentPreset\.(read|copy|openDocument|remove)|host\.(pickDirectory|openPath)|llm\.discoverModels)'
       policy: deny
-    # 3) 其余全部路径:dsh-team 成员
+    # 3) 其余全部路径：dsh-team 成员，同样要求二因素（多租户共享一台主机，单因子不够）
     - domain: 'dsh.example.com'
       subject: ['group:dsh-team']
       policy: two_factor
+
+# 注:规则里的 `methods:` 是 **HTTP 方法**过滤器(GET/POST/…),不是认证方式白名单;
+# 写 ['webauthn','totp'] 会被 validate-config 直接拒。要限定二因素类型只能在
+# totp:/webauthn: 段里做开关(把其中一个 disable: true)。

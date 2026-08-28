@@ -5,15 +5,49 @@
 
 ## 2026-08-27
 
+### 安全审查修复（第二批）
+
+- **影子路由补 browser-trust 围栏（F2）**：exact 影子路由优先级高于核心的 `/api`
+  前缀路由,被接管的 34 个端点 + `/tenancy/*` + `/register` 本来不过核心那道
+  Host/Origin 围栏。现在在 `lib/util.js` 重写同构判定 `isTrustedApiRequest`
+  （包未导出原函数）,并在 `gatedHandler` / `adminRoutes` / `session.export` /
+  `respond` / `createRegisterRoutes` 五处入口接上（未注入判定函数时 fail-closed）
+- **新增 `trustedHosts` 配置**：声明本部署服务的非 loopback 域名;缺省只认 loopback
+  Host,此时域名直入的 `/register`、`/tenancy/*` 会被围栏拒（启动时打 WARN）。
+  `cordis.patch.yml` / `install.sh` 默认块与部署手册同步补上
+- **Caddyfile**：`@register` 块也注入 `X-Dsh-Tenancy-Key`（围栏后的域名与 Origin 保持
+  一致）,并删掉转发给插件的 `X-Forwarded-For` / `X-Real-IP`（匿名入口的限流键
+  只能由 nginx 定案）
+- **特权路径清单单源化（F10）**：`@adminapi` 由 15 条精确路径改为一条 `path_regexp`,
+  与 Authelia `resources` 正则逐字符一致（已用 caddy 2.11.4 实测 15 个方法全部命中、
+  常规方法与大小写变体不误伤）；`install.sh` 验收清单新增「⑤ 两处正则一致」
+- **新增 `tools/check-privileged-sync.py`**：比对核心 `PRIVILEGED_METHODS` ↔ Caddy
+  ↔ Authelia **三份**清单（`install.sh` 只比得到后两份）。实测双向可用：核心新增
+  方法报「缺失」、Caddy 多列报「多余」，当前仓库三处一致（退出码 0）
+- **`trusted_proxies` 收指（F11）**：`private_ranges`（整内网段可信）改为 `127.0.0.0/8`
+- **Authelia 模板补二因素（F6，无邮件依赖）**：`totp.issuer` + `webauthn.disable: false`,
+  并在模板里写明二因素不靠 SMTP（注册在门户完成、密钥存 SQLite）与 NTP 前置条件。
+  【实测修正】试图用规则的 `methods: ['webauthn','totp']` 限定认证方式会被
+  `validate-config` 拒——那个键是 HTTP 方法过滤器,已删除并加了注释
+- **F12**：越界错误不再回显围栏根绝对路径；`/tenancy/sessions/<id>/acl` 的
+  `decodeURIComponent` 改用 `safeDecode`,畸形转义从 500 变 400
+- **F3 结论修正**（重要）：原报告的「符号链接根整体逃逸」不成立——`confineToRoot`
+  的 `within(real)` 会拒掉「符号链接根 + 真实前缀」组合,所以那是**可用性缺陷**
+  （真实前缀路径全被误拒 + 错误消息泄露词法根）而不是越权。已用自测把两种行为
+  固定下来,归一仍然是对的修法,但严重度从「高」降为「中」
+- 自测：`scripts/selftest.mjs` ④ 区域新增 14 项围栏断言（共 48 项）
+
+## 2026-08-27
+
 ### 安全审查修复（第一批）
 
 - **共享密钥强校验**（`lib/index.js`）：`sharedSecret` 非空时 `X-Dsh-Tenancy-Key`
   缺失也会被拒（旧逻辑只在「带头且值不符」时拒绝，抹掉该头即得 local admin）；
   比较改为 `timingSafeEqual`，带错/不带的响应不再可区分。空密钥 + `localIsAdmin`
   的组合现在会在启动时打 WARN
-- **围栏根 realpath 归一**（`lib/util.js` `expandHomeDir` + `lib/index.js`）：
-  `memberWorkspaceRoot` 自身是符号链接（如 `~/dsh -> /`）时不再把整个文件系统
-  当作「根内」；启动时 mkdir 后再补一次归一并记录实际路径
+- **围栏根 realpath 归一**（`lib/util.js` `expandHomeDir` + `lib/index.js`）：根是指向
+  其他目录的符号链接时,词法根与请求路径不在同一坐标系,成员的正常路径会被全量误拒
+  （详见第二批条目的结论修正）；现在启动时归一并在归一发生时打日志告知真实根
 - **`session.create` 的 workspaceId 旁路**：非 admin 不带 cwd 但传 `workspaceId` 时，
   要求该工作区在旁车已登记且 owner 为本人，否则 403（上游会把会话 cwd 对齐到
   工作区 path，不查即可绕过围栏）；`confineMemberPayload` 因此改为异步
@@ -27,8 +61,8 @@
   要求、`handbooks/operations.md` 直连 loopback 的 curl 需带 `x-dsh-tenancy-key`
 - `scripts/selftest.mjs` 新增「④ 安全边界回归」（围栏根符号链接、限流键与上限）
 
-> 待办（已记录未修）：影子路由复用核心 browser-trust 围栏（Host/Origin/sec-fetch-site）、
-> Caddy 特权路径清单与 Authelia 正则清单双源同步、2FA 后端缺失（`two_factor` 实为单因子）。
+> 待办（已记录未修）：低危项 F13（全量缓冲/无上游超时/文件锁 2s 等待即失败）与
+> F14（审计日志只保留一份轮转、无完整性保护）；其余本批已修，见「第二批」条目。
 
 ### P7 — 延迟 ACL 登记 + 无对话会话清理
 

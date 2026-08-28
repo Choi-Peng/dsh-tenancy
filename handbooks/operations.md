@@ -62,6 +62,52 @@ curl -b cookie -X POST https://dsh.example.com/tenancy/invites \
 
 ---
 
+## 双因素认证（无邮件环境）
+
+Authelia 的二因素只有 TOTP / WebAuthn / Duo 三种，**没有一个靠邮件投递**：注册在
+门户完成，密钥用 `storage.encryption_key` 加密后存进 SQLite。`notifier` 只负责通知，
+本项目用 `filesystem` 后端兼容无 SMTP。所以 `policy: two_factor` 在无邮件服务器上照样可用。
+
+### 成员自行注册（推荐）
+
+1. 成员用浏览器打开 `https://<域名>/auth/`（经 nginx 的 TLS 入口）登录口令；
+2. 首次访问受 `two_factor` 保护的资源时，门户会提示注册第二因素：
+   - **验证器 App**（TOTP）：扫码或手动录入；issuer 取 `totp.issuer`；
+   - **通行密钥/安全密钥**（WebAuthn）：Touch ID / Windows Hello / YubiKey 均可；
+     必须经 HTTPS 真实域名访问，否则浏览器不弹认证器。
+3. 注册完回到 `https://<域名>/` 即正常进入 dsh。
+
+### 管理员代办 TOTP（成员不便自己注册时）
+
+用 `storage user totp generate`（直接写进存储，不需要手改任何文件）：
+
+```bash
+/opt/authelia/authelia --config /etc/authelia/configuration.yml \
+  storage user totp generate <username> --issuer 'dsh.example.com' --path /tmp/<username>-totp.png
+```
+
+输出会附一行的 `otpauth://` 链接与基32 密钥：把 PNG 或链接**带外**发给成员
+（即时通讯/当面均可），成员扫完下次登录即需输验证码。已存在时加 `--force` 覆盖。
+服务器时钟必须准确（`timedatectl show-timesync --property=NTPSynchronized` 为 true），
+否则全员报“验证码无效”。
+
+### 丢失二因素 / 导入导出
+
+```bash
+# 删除某用户的 TOTP 记录（下次登录重新注册）
+/opt/authelia/authelia --config /etc/authelia/configuration.yml storage user totp delete <username>
+# 备份/迁移（必须带 --config，否则拿不到 encryption_key）
+/opt/authelia/authelia --config /etc/authelia/configuration.yml storage user totp export --format csv
+# WebAuthn 凭据查看/删除
+/opt/authelia/authelia --config /etc/authelia/configuration.yml storage user webauthn list <username>
+```
+
+> 无邮件环境的真实痛点是**密码重置**（依赖 `reset_password.jwt_secret` + 邮件链接），
+> 与二因素无关。密码重置靠管理员手改：`/opt/authelia/authelia crypto hash generate argon2
+> --password '<新密码>'` 后替换 `users.yml` 里该用户的 `password:` 字段（已开 `watch`，保存即热重载）。
+
+---
+
 ## 会话 ACL 管理
 
 > **直连 loopback 的 curl 需要先备好共享密钥**：`sharedSecret` 非空后，不带
