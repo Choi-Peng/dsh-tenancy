@@ -59,13 +59,13 @@ access_control:
     - domain: 'dsh.example.com'
       subject: ['group:dsh-admins']
       resources:
-        - '^/api/(settings\.|credentials\.|agentPreset\.(read|copy|openDocument|remove)|host\.(pickDirectory|openPath)|llm\.discoverModels)'
+        - '^/api/(settings\.|credentials\.|agentPreset\.(read|copy|openDocument|remove)|host\.(pickDirectory|openPath))'
       policy: two_factor
     # 2) 同一批路径：其余任何人（含其他认证用户）显式拒绝 —— 必须在 team 规则之前！
     #    缺这条 = 普通成员能碰 settings./credentials. 等特权方法。
     - domain: 'dsh.example.com'
       resources:
-        - '^/api/(settings\.|credentials\.|agentPreset\.(read|copy|openDocument|remove)|host\.(pickDirectory|openPath)|llm\.discoverModels)'
+        - '^/api/(settings\.|credentials\.|agentPreset\.(read|copy|openDocument|remove)|host\.(pickDirectory|openPath))'
       policy: deny
     # 3) 其余全部路径：dsh-team 成员，同样要求二因素（多租户共享一台主机，单因子不够）
     - domain: 'dsh.example.com'

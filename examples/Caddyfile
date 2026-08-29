@@ -18,7 +18,7 @@
 :9443 {
 	bind 127.0.0.1
 
-	@adminapi path_regexp adminapi ^/api/(settings\.|credentials\.|agentPreset\.(read|copy|openDocument|remove)|host\.(pickDirectory|openPath)|llm\.discoverModels).*$
+	@adminapi path_regexp adminapi ^/api/(settings\.|credentials\.|agentPreset\.(read|copy|openDocument|remove)|host\.(pickDirectory|openPath)).*$
 
 	handle @adminapi {
 		forward_auth 127.0.0.1:9091 {
