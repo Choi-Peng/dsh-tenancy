@@ -400,7 +400,25 @@ remote-web-ui 的更新检查端点，其自身设备配对围栏拒绝域名来
 
 tenancy 对无 ACL 记录的存量会话返回 404（`no-acl-record`）。owner 徽章因此隐藏、
 共享框显示「该会话还没有共享记录」——正常行为；管理员可 `POST /tenancy/claim`
-补记录。
+补记录。（修复 pending 读穿后,未发首条消息的新会话也能读回其 pending 记录。）
+
+### 新会话卡「正在刷新模型列表…」/`session.history → 403`（已修复）
+
+成员（非 admin）点 new session 后:模型选择器永卡 `Refreshing model list…`、
+历史面板报 `Failed to load history: transport failure for /api/session.history:
+HTTP 403`,发一条消息或刷新页面才恢复。
+
+根因是 P7 延迟 ACL 登记的读穿缺口:`session.create`/`fork` 成功后记录先进内存
+`pendingSessions`、首条 `session.prompt` 才落盘 `acl.json`,而门控
+`readable()/writable()` 与 WS 帧过滤当时只查落盘库——pending 窗口里创建者对
+**自己的**新会话也被 403。客户端表现分两头:`session.models` 的 transport 异常
+抛在错误态赋值之前,UI 停在 loading（卡「正在刷新」）；history 失败态驻留到
+重挂载,所以「刷新才好」其实只是重新拉取,真正恢复权限的是那条 prompt。
+
+已修复（pending 读穿兜底,见 CHANGELOG 2026-08-29）;老版本命中此症状只能升级。
+升级后仅剩一个窄窗口:插件**重启**会丢掉 pending——重启前建了但从未发消息的会话
+对创建者不可见,fail-closed 兜底（管理员 `POST /tenancy/claim` 可救），且这类
+会话本就由扫盘清理任务在 24 小时后删除。
 
 ### 确认 dsh 进程用户（改权限前必做）
 
