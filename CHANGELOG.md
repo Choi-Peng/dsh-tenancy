@@ -3,6 +3,92 @@
 > [!NOTE]
 > 本文档由 AI 生成,可能存在错误或遗漏,使用前请 review。
 
+## 2026-08-29
+
+### P10 — 成员文件访问收窄到个人主工作区(`~/dsh/<userName>`)
+
+- 原先成员的目录浏览/建目录/新建工作区被围在整个 `memberWorkspaceRoot`(如 `~/dsh`)
+  内,意味着任意成员都能浏览/读写 `~/dsh/alice`、`~/dsh/bob` 等**他人**的个人目录。
+  P10 把非管理员成员的**文件访问围栏根**从 `memberWorkspaceRoot` 进一步收窄为
+  `memberWorkspaceRoot/<userName>`(个人主工作区)。
+- 新增 `personalRootOf(user)`:解析并惰性创建 `~/dsh/<user>`(realpath 归一),作为
+  成员的围栏根。`confineMemberPayload` 的
+  `workspace.create` / `host.listDirectory` / `host.createDirectory` / 非工作区
+  `session.create` cwd 全部改用该个人根:
+  - **浏览**(`host.listDirectory`)越界/缺省 → 静默钳制回个人根(不吐成员根绝对路径);
+  - **写入/新建**(`workspace.create`、`host.createDirectory`)越出个人根 → 直接 403;
+  - **非工作区会话 cwd** → 收窄到个人根(`~/dsh/alice` 下任意项目目录可建会话)。
+- **共享例外**:共享用户经 `workspace.create` 之外的 `session.create`(workspaceId 或
+  cwd)指向**共享工作区**时,按 `workspaceCreatable` 放行——即共享用户仍能在他人
+  共享给自己的工作区里新建会话(哪怕该工作区路径在本人根之外);无关用户仍 403。
+- **目录浏览响应 `home`**(`host.listDirectory` 的 `value.home`)改写为成员个人根,
+  而非整个 `memberRoot`,避免 UI 诱导跳出个人根。
+- 缺省 `memberWorkspaceRoot` 仍为 `~/dsh`;空串(未启用围栏)对这些方法对成员维持
+  admin-only,行为不变。注册时 `createPersonalWorkspace` 已经为每个新用户建好
+  `~/dsh/<user>`。
+- 自测:`scripts/selftest.mjs` 新增 ⑧「成员文件访问收窄到个人根(P10)」——本人根下
+  新建工作区/建目录放行、他人根下新建工作区/建目录 403、浏览他人根钳制回本人根、
+  缺省浏览与 `home` 指向本人根、共享用户经 cwd 在共享工作区建会话放行、无关用户 403。
+  全量 117/0。
+
+## 2026-08-29
+
+### P9 — 工作区共享 + 注册自动建个人工作区
+
+- **注册即建个人工作区**:邀请码注册成功后(`registerUser`),若启用了
+  `memberWorkspaceRoot`(默认 `~/dsh`),自动在 `~/dsh/<username>` 创建以用户名
+  为名的工作区并旁车登记 owner。经 `ctx.get('workspaceRegistry').create(path,
+  title)` 创建真实工作区(标题=用户名),目录不存在则建;失败不翻转注册结果,
+  仅记日志(目录已建,用户首次登录仍可见)。
+- **工作区共享模型**:旁车 workspace 记录新增 `sharedUsers: string[]`(`workspace.create`
+  成功后初始化;注册建的个人工作区同形)。管理面新增
+  `GET/POST /tenancy/workspaces/<id>/share`(owner/admin 限定;POST 以
+  `{ sharedUsers: [...] }` 全量覆盖,去重/去空白/剔除 owner 自身)。
+- **会话创建门(requirement 3/4/5)**:`session.create` 的 `workspaceId` 与 `cwd` 两
+  种形式对成员统一改为「owner 或 sharedUser」才放行。共享用户可在共享工作区新建
+  会话;仅被共享了会话但工作区未共享的用户(既非 owner 也非 sharedUser)无法在
+  该工作区新增会话。cwd 形式额外经 `workspaceByPath` 反查工作区归属,堵「换字段绕过」。
+- **列表/事件可见性(requirement 3/5)**:`workspace.list` 成员可见性从「仅 owner」
+  扩展为 `workspaceVisible(owner / sharedUser / 工作区内存在可读会话)`;会话仍按
+  `readable` 收敛到可读子集。因此共享工作区的共享用户看到「工作区名 + 自己可读的
+  会话」;仅共享会话未共享工作区时,用户仍看到工作区名与该会话,但不能新增会话。
+  WS 帧(`workspace`/`workspace-removed`/`workspace-order-changed`)过滤同构对齐(共享
+  用户仍收帧,只是会话 ID 收敛)。
+- **客户端(用户中心工作区管理)**:`WorkspaceList` 增加共享徽章与「共享」按钮,
+  打开 `WorkspaceShareDialog`,owner/admin 可增删共享用户。
+- 自测:`scripts/selftest.mjs` 新增 ⑦「工作区共享(P9)」(owner 登记、共享用户设/改、
+  共享用户建会话放行、非 owner/共享用户建会话 403、谓词边界),并在 ③ 注册事务里
+  验证「注册成功后触发个人工作区创建」。全量 107/0。
+
+## 2026-08-29
+
+### 修复:P7 pending 窗口 403（新会话模型列表永卡「Refreshing model list…」/ 历史加载失败）
+
+- **症状**（成员,非 admin）:点 new session 后模型选择器永卡 `Refreshing model
+  list…`、历史报 `Failed to load history: transport failure for
+  /api/session.history: HTTP 403`;发首条消息或刷新页面才恢复
+- **根因**:P7（fe258e0）引入延迟 ACL 登记——`session.create`/`fork` 成功后记录
+  只进内存 `pendingSessions`,首条 `session.prompt` 才落盘 `acl.json`——但门控
+  `readable()/writable()/canSeeUser()` 与 `/tenancy/sessions*` 路由只查落盘库。
+  pending 窗口内创建者对自己的新会话 `models/history/selectModel` 全被 403。
+  客户端两头的表现都由此派生:`ModelDirectory.load()` 里 transport 异常抛在
+  error 态赋值前 → 状态永卡 loading;history 失败态驻留到重挂载 → 「刷新才好」
+  实为重新拉取,权限早已被那条 prompt 恢复。（31bb078 只把 `llm.discoverModels`
+  挪进影子路由,解了目录侧,没解会话侧。）
+- **修复(pending 读穿兜底,查落盘 → 再查 pending,与 fork 父记录既有写法同构)**:
+  - `readable()` / `writable()` / `canSeeUser()`（WS 帧过滤)三处会话判定
+  - `GET /tenancy/sessions` 列表合并 pending（同 id 落盘优先,可见性与
+    `readable()` 严格一致,消除「能打开却不在列表」)
+  - `GET/POST /tenancy/sessions/<id>/acl`:读回、owner 判定、字段保留都兜底
+    pending;显式保存视为落盘并即删 pending 影子
+  - `lib/util.js` 新增纯谓词 `recordReadable`/`recordWritable`,判定语义
+    单源（三处共用);注释与手册同步（`handbooks/operations.md` 排障新增）
+  - fail-closed 方向不变:无记录且不在 pending 仍拒;他人读/写/收帧仍 403/丢帧
+- 自测:`scripts/selftest.mjs` 新增 ⑥「P7 pending 读穿回归」影子路由级用例
+  （19 项,含创建放行、pending 不落盘、读穿、越权负例、落盘、谓词边界）;
+  **对修复前代码该组恰有 5 项失败**（与用户报的三症状一一对应),修复后
+  全量 73/0
+
 ## 2026-08-27
 
 ### 安全审查修复（第二批）

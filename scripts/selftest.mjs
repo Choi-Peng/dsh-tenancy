@@ -572,5 +572,107 @@ console.log('⑦ 工作区共享(P9)');
 
 //#endregion
 
+//#region ⑧ 成员文件访问收窄到个人根(P10):~/dsh/<user> 内可建,他人目录拒绝
+
+console.log('⑧ 成员文件访问收窄到个人根(P10)');
+{
+  const dir = tempDir('tenancy-selftest-p10-');
+  const pool = join(dir, 'pool');
+  mkdirSync(join(pool, 'alice'), { recursive: true });
+  mkdirSync(join(pool, 'bob'), { recursive: true });
+  mkdirSync(join(pool, 'shared-ws'), { recursive: true });
+
+  const cfg = {
+    identityHeader: 'remote-user', groupsHeader: 'remote-groups',
+    sharedSecret: '', adminGroups: ['dsh-admins'], trustedHosts: [],
+    localPrincipal: 'local', localIsAdmin: true, defaultAccess: 'private',
+    hideEmptyWorkspaces: false, hardenRespond: false,
+    auditPath: join(dir, 'tenancy', 'audit.log'), dbPath: join(dir, 'tenancy', 'acl.json'),
+    memberWorkspaceRoot: pool, registerEnabled: false,
+    registerGroup: 'dsh-team', autheliaUsersPath: join(dir, 'users.yml'),
+    autheliaBin: '/nonexistent', invitesPath: join(dir, 'tenancy', 'invites.json')
+  };
+
+  const apiStub = {
+    sessions: {
+      create: async (r) => ({ rpcId: r.rpcId, result: { ok: true, value: { sessionId: 'sess-new' } } }),
+      prompt: async (r) => ({ rpcId: r.rpcId, result: { ok: true, value: { accepted: true } } }),
+      list: async (r) => ({ rpcId: r.rpcId, result: { ok: true, value: { items: [] } } })
+    },
+    workspace: {
+      create: async (r) => ({ rpcId: r.rpcId, result: { ok: true, value: { workspace: { workspaceId: 'ws-' + basename(r.payload.path), path: r.payload.path, title: basename(r.payload.path), sessionIds: [], archivedSessionIds: [], createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() }, created: true } } }),
+      list: async (r) => ({ rpcId: r.rpcId, result: { ok: true, value: { items: [] } } })
+    },
+    host: {
+      listDirectory: async (r) => ({ rpcId: r.rpcId, result: { ok: true, value: { path: r.payload.path, home: '/real-home', crumbs: [], entries: [], truncated: false } } }),
+      createDirectory: async (r) => ({ rpcId: r.rpcId, result: { ok: true, value: { path: join(r.payload.path, r.payload.name) } } })
+    }
+  };
+
+  const routes = new Map();
+  let gateDispose = null;
+  let rpcSeq = 0;
+  const ctxStub = {
+    logger: { info() {}, warn() {}, error() {} },
+    get(name) { return name === 'apiProxy' ? apiStub : undefined; },
+    inject(deps, cb) { if (Array.isArray(deps) && deps.includes('settings')) cb({ settings: { register() {} } }); else if (cb) cb({}); },
+    effect(fn) { gateDispose = fn(); },
+    webServer: { register(route) { routes.set(route.path, route.handler); return () => routes.delete(route.path); } }
+  };
+  applyTenancy(ctxStub, cfg);
+
+  function tenancyReq({ url, method = 'POST', body = null, user = 'alice', groups = 'dsh-team' }) {
+    const headers = { host: 'localhost:3088', origin: 'http://localhost:3088', 'content-type': 'application/json', 'remote-user': user, 'remote-groups': groups };
+    const buf = body === null ? null : Buffer.from(JSON.stringify(body));
+    return { method, url, headers, [Symbol.asyncIterator]() { let done = body === null; return { next: async () => (done ? { done: true, value: undefined } : (done = true, { done: false, value: buf })) }; } };
+  }
+  function tenancyRes() { return { __status: 0, __headers: {}, body: '', setHeader(k, v) { this.__headers[String(k).toLowerCase()] = v; }, writeHead(status, headers) { this.__status = status; if (headers) Object.assign(this.__headers, headers); return this; }, end(chunk) { this.body = chunk ?? ''; } }; }
+  async function gateCall(path, method, payload, user = 'alice', groups = 'dsh-team') {
+    const req = tenancyReq({ url: path, body: { type: 'client-request', rpcId: `rpc-${++rpcSeq}`, method, payload }, user, groups });
+    const res = tenancyRes();
+    await routes.get(path)(req, res);
+    let parsed = null; try { parsed = JSON.parse(String(res.body)); } catch {}
+    return { status: res.__status, body: parsed ?? String(res.body) };
+  }
+
+  // 1) alice 在本人根(~/<pool>/alice)下新建工作区 → 放行,path 收窄在个人根内
+  const wcOwn = await gateCall('/api/workspace.create', 'workspace.create', { path: join(pool, 'alice', 'proj-x') }, 'alice');
+  assert(wcOwn.status === 200 && wcOwn.body?.result?.value?.workspace?.path === join(pool, 'alice', 'proj-x'), '成员在本人根下新建工作区放行');
+
+  // 2) alice 尝试在他人(bob)根下新建工作区 → 403
+  const wcOther = await gateCall('/api/workspace.create', 'workspace.create', { path: join(pool, 'bob', 'evil') }, 'alice');
+  assert(wcOther.status === 403, '成员在他人根下新建工作区被拒');
+
+  // 3) alice 浏览他人根 → 静默钳制回本人根;缺省也回本人根
+  const lsOther = await gateCall('/api/host.listDirectory', 'host.listDirectory', { path: join(pool, 'bob') }, 'alice');
+  assert(lsOther.status === 200 && lsOther.body?.result?.value?.path === join(pool, 'alice'), '浏览他人根被钳制回本人根');
+  const lsDefault = await gateCall('/api/host.listDirectory', 'host.listDirectory', {}, 'alice');
+  assert(lsDefault.status === 200 && lsDefault.body?.result?.value?.path === join(pool, 'alice'), '缺省浏览回本人根');
+  assert(lsDefault.body?.result?.value?.home === join(pool, 'alice'), 'home 改写为本人根(非 memberRoot)');
+
+  // 4) alice 在他人根下建目录 → 403;在本人根下建目录 → 放行
+  const mkOther = await gateCall('/api/host.createDirectory', 'host.createDirectory', { path: join(pool, 'bob'), name: 'drop' }, 'alice');
+  assert(mkOther.status === 403, '在他人根下建目录被拒');
+  const mkOwn = await gateCall('/api/host.createDirectory', 'host.createDirectory', { path: join(pool, 'alice'), name: 'sub' }, 'alice');
+  assert(mkOwn.status === 200, '在本人根下建目录放行');
+
+  // 5) bob 经 cwd 指向共享工作区(在本人根外)→ 按 workspaceCreatable 放行
+  //    共享工作区须在 alice 本人根内(alice 才能创建);经 cwd 跨到该路径对 bob 放行
+  await gateCall('/api/workspace.create', 'workspace.create', { path: join(pool, 'alice', 'shared-ws') }, 'alice');
+  const shr = tenancyReq({ url: '/tenancy/workspaces/ws-shared-ws/share', method: 'POST', body: { sharedUsers: ['bob'] }, user: 'alice' });
+  const shrRes = tenancyRes();
+  await routes.get('/tenancy')(shr, shrRes);
+  assert(shrRes.__status === 200, 'alice 把共享工作区共享给 bob');
+  const sessShared = await gateCall('/api/session.create', 'session.create', { cwd: join(pool, 'alice', 'shared-ws') }, 'bob');
+  assert(sessShared.status === 200, '共享用户经 cwd 在共享工作区(本人根外)新建会话放行');
+  const sessD = await gateCall('/api/session.create', 'session.create', { cwd: join(pool, 'alice', 'shared-ws') }, 'dave');
+  assert(sessD.status === 403, '无关用户经 cwd 到共享工作区被拒');
+
+  if (gateDispose) gateDispose();
+  rmSync(dir, { recursive: true, force: true });
+}
+
+//#endregion
+
 console.log(`\n结果:${passed} 通过 / ${failed} 失败`);
 process.exit(failed > 0 ? 1 : 0);
