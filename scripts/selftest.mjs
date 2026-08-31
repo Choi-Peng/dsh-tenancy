@@ -855,7 +855,7 @@ console.log('⑩ 公开站点 apply() 接线');
     get() { return undefined; },
     inject(deps, cb) {
       if (Array.isArray(deps) && deps.includes('settings')) cb({ settings: { register() {} } });
-      else if (Array.isArray(deps) && deps.includes('skills')) cb({ skills: { register(skill) { registeredSkills.push(skill); return () => {}; } } });
+      else if (Array.isArray(deps) && deps.includes('skills')) cb({ skills: { register(skill) { registeredSkills.push({ ...skill, provider: skill.provider ?? 'runtime' }); return () => {}; } } });
       else if (cb) cb({});
     },
     effect(fn) { gateDispose = fn(); },
@@ -868,10 +868,12 @@ console.log('⑩ 公开站点 apply() 接线');
   const res = await fetch(`http://127.0.0.1:${port}/alice/myapp/`, { redirect: 'manual' });
   assert(res.status === 200 && (await res.text()).includes('apply-ok'), 'apply() 接线:公开站点可访问构建产物');
 
-  // P11 skill:apply() 经 ctx.skills.register 注入「发布 Web 应用」指引(产物目录/免构建单页)
+  // P11 skill:apply() 经 ctx.skills.register 注入「发布 Web 应用」指引(产物目录/免构建单页/虚拟环境)
   const skill = registeredSkills.find((s) => s.name === 'publish-web-app');
   assert(skill !== undefined && typeof skill.description === 'string' && skill.description.length > 0, 'apply() 注册 publish-web-app skill');
   assert(skill.content.includes('dist') && skill.content.includes('index.html') && skill.content.includes('<user>'), 'skill 内容写明 dist 产物目录、index.html 与 URL 形态');
+  assert(skill.content.includes('.venv') && skill.content.includes('node_modules') && skill.content.includes('npm install -g'), 'skill 内容写明项目内虚拟环境/依赖隔离');
+  assert(skill.source === 'runtime' && skill.provider === 'runtime', 'skill 带 source/provider(skill(name) 加载器要求)');
   assert(/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(skill.name), 'skill 名称为合法 kebab-case');
 
   if (gateDispose) gateDispose();

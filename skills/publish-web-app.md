@@ -1,7 +1,7 @@
 ---
 name: publish-web-app
-description: 在成员个人工作区编写/构建 Web 应用,把构建产物放进 dist 目录,经公开站点以 https://dsh.example.com/<user>/<projectName>/ 发布;含免构建单 index.html 页面的写法
-whenToUse: 用户要求开发、构建或发布一个可公开访问的网站/Web 应用/前端项目,或询问公开站点 URL、构建产物目录、如何让页面可访问时
+description: 在成员个人工作区编写/构建 Web 应用,用项目内虚拟环境隔离依赖,把构建产物放进 dist 目录,经公开站点以 https://dsh.example.com/<user>/<projectName>/ 发布;含免构建单 index.html 页面的写法
+whenToUse: 用户要求开发、构建或发布一个可公开访问的网站/Web 应用/前端项目,或询问公开站点 URL、构建产物目录、如何让页面可访问、如何在项目里创建虚拟环境/安装依赖时
 ---
 
 # 发布 Web 应用到公开站点
@@ -32,6 +32,33 @@ https://<公开域名>/<user>/<projectName>/
    必须用相对路径(`./assets/app.js`、`<base href="./">`),**禁止**写死
    `/assets/...`、`/favicon.ico` 这类绝对路径——它们会解析到域名根(`/assets/...`),
    而不是项目子路径,结果 404。
+
+## 项目工作区内使用虚拟环境(依赖隔离)
+
+**所有依赖操作都必须在项目目录 `~/dsh/<user>/<projectName>/` 内进行,绝不安装到
+系统全局**——这是多租户共享主机,全局安装会污染他人环境,也常因权限被拒。
+
+- **Python 项目 / 用到 Python 工具**:在项目目录创建虚拟环境,并**始终用它的
+  解释器**干活:
+  ```bash
+  cd ~/dsh/<user>/<projectName>
+  python3 -m venv .venv
+  .venv/bin/pip install -r requirements.txt   # 装进 venv,不动系统 Python
+  .venv/bin/python build.py                    # 跑项目脚本 / 构建
+  ```
+  ⚠ DSH 的每条 bash 命令都是**全新 shell**,`source .venv/bin/activate` 不会跨
+  命令生效——一律直接写 `.venv/bin/...` 全路径;确需激活时在同一条命令内
+  `source .venv/bin/activate && ...`。
+- **Node 项目**:依赖本来就装进项目内 `node_modules`(已是项目级隔离,无需 venv);
+  但**禁止 `npm install -g`** 全局安装工具;用项目内 `node_modules/.bin/` 或
+  `npx` 调用工具;保留 `package-lock.json` 保证可复现构建。
+- **venv 放哪**:`.venv` 建在项目根(`~/dsh/<user>/<projectName>/.venv`),随项目
+  隔离、随项目删除,不占全局空间。`.venv`、`node_modules` 是隐藏/依赖目录,
+  **不会被公开站点服务**(公开站点只读 dist,隐藏文件一律 404),留在项目里即可,
+  不必移出;若项目做版本管理,把它们加进 `.gitignore`。
+- **构建产物与依赖目录分开**:依赖目录(`.venv`、`node_modules`)与发布目录
+  (`dist`)是两个东西——只把**构建输出**复制/产出到 `dist`,不要把 `.venv` 或
+  `node_modules` 弄进 `dist`。
 
 ## 有构建步骤的项目(框架 / Vite / webpack 等)
 

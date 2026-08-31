@@ -365,6 +365,11 @@ https://pub.example.com/alice/myapp/assets/app.js   # 静态资源
   `index.html` 不会被发布（404）；
 - 页面资源必须**相对引用**（`./assets/x.js`、`<base href="./">`），禁止绝对路径
   `/assets/...`（子路径部署下会 404）；Vite 需 `base: './'`；
+- **依赖隔离在项目内**：Python 在项目根建 `.venv`（`python3 -m venv .venv`，之后
+  一律用 `.venv/bin/python`、`.venv/bin/pip`——DSH 每条 bash 命令是全新 shell，
+  `source activate` 不跨命令生效）；Node 依赖装进项目内 `node_modules`，禁止
+  `npm install -g`。`.venv`/`node_modules` 是隐藏/依赖目录，公开站点不会服务，
+  留在项目内即可，别弄进 `dist`；
 - **最简单免构建单页**：无需任何工具，直接把 `index.html` 写进
   `~/dsh/<user>/<projectName>/dist/` 即可访问（CSS/JS 可内联或相对引用）；
 - 构建后验证 `dist/index.html` 存在，再告知用户
