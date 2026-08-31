@@ -355,6 +355,24 @@ https://pub.example.com/alice/myapp/assets/app.js   # 静态资源
   `publicSpaFallback`）；
 - 未构建（无 `dist` 目录）→ 404「未发布」。
 
+#### DSH agent 怎么写应用（`publish-web-app` skill）
+
+插件启动时会向 DSH 注册 `publish-web-app` skill（`skills/publish-web-app.md`，
+经 `ctx.skills` 运行时注入，零安装步骤）。agent 编写/构建 Web 应用时自动遵循：
+
+- 项目建在个人工作区 `~/dsh/<user>/<projectName>/`，**构建产物必须放进
+  `<项目>/dist/`**（`publicBuildDir` 默认 `dist`）——URL 只映射 dist，项目根目录的
+  `index.html` 不会被发布（404）；
+- 页面资源必须**相对引用**（`./assets/x.js`、`<base href="./">`），禁止绝对路径
+  `/assets/...`（子路径部署下会 404）；Vite 需 `base: './'`；
+- **最简单免构建单页**：无需任何工具，直接把 `index.html` 写进
+  `~/dsh/<user>/<projectName>/dist/` 即可访问（CSS/JS 可内联或相对引用）；
+- 构建后验证 `dist/index.html` 存在，再告知用户
+  `https://<公开域名>/<user>/<projectName>/`。
+
+手动把该 skill 文件拷入 `~/.dsh/skills/` 也能被 dsh-skill-filesystem 发现
+（文件带 frontmatter，两种方式同源）。
+
 ### 部署（一次性）
 
 1. **插件配置**（`cordis.patch.yml` / install.sh 模板已含）：
@@ -390,6 +408,26 @@ curl -sI https://pub.example.com/alice/myapp/ | head -3
   公网入口只能是 nginx/Caddy 的转发；
 - **Host 白名单**：`publicSitesHosts` 建议显式列出公开域名，防代理侧 Host 错配；
 - 端口冲突（3089 被占用）只会让公开站点启动失败并打 error 日志，不影响主站。
+
+### 项目根目录有 index.html 但没有 dist，能访问吗？
+
+**不能**——访问 `https://<公开域名>/<user>/<projectName>/` 返回 404。URL 固定映射到
+`~/dsh/<user>/<projectName>/<publicBuildDir>`（默认 `dist`），该目录不存在即视为
+「未发布」，项目根目录的文件（包括 `index.html`）不会被服务。这是有意的安全边界：
+只公开构建产物，避免把源码/依赖一起暴露。
+
+处理方式（任选其一）：
+
+```bash
+# 1) 把静态文件放进 dist(最简单,免构建单页也适用)
+mkdir -p ~/dsh/<user>/<projectName>/dist
+cp ~/dsh/<user>/<projectName>/index.html ~/dsh/<user>/<projectName>/dist/
+
+# 2) 让构建工具直接输出到 dist(框架项目:Vite 默认即 dist;webpack 设 output.path 等)
+```
+
+让 DSH agent 来做的话更省事：`publish-web-app` skill 已写明「产物放 dist、资源相对
+引用」的完整约定（见上方「DSH agent 怎么写应用」）。
 
 ---
 

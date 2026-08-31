@@ -87,6 +87,10 @@ sudo bash install.sh --domain dsh.example.com
     （`~/dsh/<user>/<projectName>/dist`，构建输出目录名可配）。无鉴权、只读，
     只服务构建产物，不暴露源码/隐藏文件；详见 [docs/architecture.md](docs/architecture.md) 与
     [handbooks/operations.md](handbooks/operations.md)
+10. **发布指引 skill** — 插件启动时经 `ctx.skills` 注册 `publish-web-app` skill
+    （`skills/publish-web-app.md`）：DSH agent 编写/构建 Web 应用时自动遵循
+    「产物放 `<项目>/dist/`、资源相对引用」的约定，含最简单免构建单
+    `index.html` 的写法；该文件也可直接拷入 `~/.dsh/skills/` 使用
 
 ---
 

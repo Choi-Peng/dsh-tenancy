@@ -848,11 +848,16 @@ console.log('⑩ 公开站点 apply() 接线');
   };
 
   const routes = new Map();
+  const registeredSkills = [];
   let gateDispose = null;
   const ctxStub = {
     logger: { info() {}, warn() {}, error() {} },
     get() { return undefined; },
-    inject(deps, cb) { if (Array.isArray(deps) && deps.includes('settings')) cb({ settings: { register() {} } }); else if (cb) cb({}); },
+    inject(deps, cb) {
+      if (Array.isArray(deps) && deps.includes('settings')) cb({ settings: { register() {} } });
+      else if (Array.isArray(deps) && deps.includes('skills')) cb({ skills: { register(skill) { registeredSkills.push(skill); return () => {}; } } });
+      else if (cb) cb({});
+    },
     effect(fn) { gateDispose = fn(); },
     webServer: { register(route) { routes.set(route.path, route.handler); return () => routes.delete(route.path); } }
   };
@@ -862,6 +867,12 @@ console.log('⑩ 公开站点 apply() 接线');
   assert(typeof port === 'number' && port > 0, 'apply() 启动公开站点并暴露 sitesPort');
   const res = await fetch(`http://127.0.0.1:${port}/alice/myapp/`, { redirect: 'manual' });
   assert(res.status === 200 && (await res.text()).includes('apply-ok'), 'apply() 接线:公开站点可访问构建产物');
+
+  // P11 skill:apply() 经 ctx.skills.register 注入「发布 Web 应用」指引(产物目录/免构建单页)
+  const skill = registeredSkills.find((s) => s.name === 'publish-web-app');
+  assert(skill !== undefined && typeof skill.description === 'string' && skill.description.length > 0, 'apply() 注册 publish-web-app skill');
+  assert(skill.content.includes('dist') && skill.content.includes('index.html') && skill.content.includes('<user>'), 'skill 内容写明 dist 产物目录、index.html 与 URL 形态');
+  assert(/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(skill.name), 'skill 名称为合法 kebab-case');
 
   if (gateDispose) gateDispose();
   assert(globalThis.__dshTenancy === undefined, 'teardown 清理 globalThis 钩子');

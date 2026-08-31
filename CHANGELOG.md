@@ -28,11 +28,20 @@
 - **部署示例**:在 `examples/nginx/dsh.example.com.conf` 内新增公开站点 server 块
   (nginx 直连 3089,无鉴权);`examples/Caddyfile` 末尾附「全流量走 Caddy」的可选块;
   `install.sh` 生成的配置模板与 `cordis.patch.yml` 同步补全 P11 键。
+- **发布指引 skill(`publish-web-app`)**:新增 `skills/publish-web-app.md`(带
+  frontmatter,可同时被 dsh-skill-filesystem 发现),插件启动时经
+  `ctx.inject(['skills'])` + `ctx.skills.register` 运行时注入,零安装步骤。
+  内容明确 DSH 写应用的约定:项目建在 `~/dsh/<user>/<projectName>/`、**构建产物
+  必须放 `<项目>/dist/`**(URL 只映射 dist,项目根 index.html 不发布)、资源必须
+  相对引用(Vite `base: './'`),以及**最简单免构建单 index.html 直接写进 dist**
+  的写法、构建后验证与最终 URL 格式。`package.json` files 增加 `skills` 目录;
+  运维手册补「无 dist 但有 index.html → 404」FAQ(含两种处理方式)。
 - 自测:`scripts/selftest.mjs` 新增 ⑨「公开站点(P11)」(真实 HTTP 服务冒烟:
   发布/301/资源/未发布 404/隐藏文件/穿越/符号链接逃逸与根内错位/HEAD/405/SPA
   回落/自定义 buildDir/Host 白名单/纯函数边界,41 项)与 ⑩「apply() 接线」
-  (`publicSitesEnabled=true` 经插件启动真实端口并暴露 `__dshTenancy.sitesPort`)。
-  全量 151/0。
+  (`publicSitesEnabled=true` 经插件启动真实端口并暴露 `__dshTenancy.sitesPort`,
+  且断言 `publish-web-app` skill 注册成功、内容含 dist/index.html 约定)。
+  全量 154/0。
 
 ## 2026-08-29
 

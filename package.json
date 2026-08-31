@@ -21,6 +21,7 @@
   },
   "files": [
     "lib",
+    "skills",
     "cordis.patch.yml",
     "install.sh",
     "examples",
