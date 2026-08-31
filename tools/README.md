@@ -35,7 +35,7 @@ systemctl stop authelia && install -m755 /tmp/authelia.patched /opt/authelia/aut
 
 - 安装备份: `/opt/authelia/authelia.bak-20260826152827`(补丁前原始 v4.39.20);
 - 或重装官方 v4.39.20 后, 恢复 nginx 悬浮按钮注入
-  (见 git 历史中 `/etc/nginx/conf.d/dsh.choi-p.site.conf` 的 sub_filter 段)。
+  (见 git 历史中 `/etc/nginx/conf.d/pub.example.com.conf` 的 sub_filter 段)。
 
 ### 当前状态 (2026-08-26)
 

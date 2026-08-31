@@ -81,6 +81,12 @@ sudo bash install.sh --domain dsh.example.com
 7. **邀请码注册** — 管理员生成一次性邀请码，新成员通过 `/register` 自助注册
 8. **审计日志** — `$DSH_HOME/tenancy/audit.log`（JSONL，5MB 轮转）记录门控拒绝、
     ACL 变更等
+9. **公开站点（P11）** — 独立端口匿名静态发布：把公开域名（如 `pub.example.com`）
+    经 nginx/Caddy 转发到 `127.0.0.1:3089`，则
+    `pub.example.com/<user>/<projectName>` 直接公开个人工作区里构建好的项目
+    （`~/dsh/<user>/<projectName>/dist`，构建输出目录名可配）。无鉴权、只读，
+    只服务构建产物，不暴露源码/隐藏文件；详见 [docs/architecture.md](docs/architecture.md) 与
+    [handbooks/operations.md](handbooks/operations.md)
 
 ---
 

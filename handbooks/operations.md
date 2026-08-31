@@ -334,6 +334,65 @@ echo "备份完成: $BACKUP_DIR"
 
 ---
 
+## 公开站点（P11）：pub.example.com/\<user\>/\<projectName\>
+
+tenancy 在独立端口（默认 `127.0.0.1:3089`）提供**匿名只读**静态发布：把公开域名
+转发到该端口后，`pub.example.com/<user>/<projectName>` 就公开服务成员个人工作区
+`~/dsh/<user>/<projectName>/dist`（`dist` 可配为 `publicBuildDir`）里的**构建产物**。
+
+### 成员怎么发布
+
+不需要任何标记步骤：只要项目目录下有构建输出（如 `npm run build` 产出
+`~/dsh/<user>/<projectName>/dist/index.html`），即可访问：
+
+```text
+https://pub.example.com/alice/myapp/            # 页面(index.html)
+https://pub.example.com/alice/myapp/assets/app.js   # 静态资源
+```
+
+- 无尾斜杠的根 URL 会 301 到带尾斜杠（页面内相对资源依赖尾斜杠）；
+- SPA 客户端路由（`/alice/myapp/some/route`）默认回落 `index.html`（
+  `publicSpaFallback`）；
+- 未构建（无 `dist` 目录）→ 404「未发布」。
+
+### 部署（一次性）
+
+1. **插件配置**（`cordis.patch.yml` / install.sh 模板已含）：
+   - `publicSitesEnabled: true`（schema 默认即 true）
+   - `publicSitesHost: '127.0.0.1'`、`publicSitesPort: 3089`（保持回环绑定！）
+   - `publicSitesHosts: ['pub.example.com']`（生产建议；空=接受任意 Host）
+2. **nginx**：在 `examples/nginx/dsh.example.com.conf` 末尾新增公开站点 server 块
+   （`server_name pub.example.com` 换成你的公开域名，转发到 `127.0.0.1:3089`，
+   无鉴权、不走 Caddy/Authelia）。若你的拓扑要求全流量走 Caddy，
+   见 `examples/Caddyfile` 末尾的可选块。
+3. 重启 dsh-web：`pm2 restart dsh-web`。
+
+### 验证
+
+```bash
+# 插件侧:公开站点监听日志
+pm2 logs dsh-web --lines 50 | grep 公开站点
+
+# 直连端口(本机)
+curl -sI http://127.0.0.1:3089/alice/myapp/ | head -3
+# → HTTP/1.1 200 OK  +  content-type: text/html; charset=utf-8
+
+# 经域名
+curl -sI https://pub.example.com/alice/myapp/ | head -3
+```
+
+### 安全要点（务必读）
+
+- **公开 = 无鉴权**：任何能访问该域名的人都能读任何用户**已构建**项目的内容。
+  只服务 `<project>/dist` 构建产物——源码、`.env`、`node_modules`、隐藏文件、
+  符号链接逃逸（`dist → /etc`、`dist → 兄弟项目`）一律 404；
+- **绑定保持回环**：`publicSitesHost` 不要改成 `0.0.0.0`（插件会打 WARN）；
+  公网入口只能是 nginx/Caddy 的转发；
+- **Host 白名单**：`publicSitesHosts` 建议显式列出公开域名，防代理侧 Host 错配；
+- 端口冲突（3089 被占用）只会让公开站点启动失败并打 error 日志，不影响主站。
+
+---
+
 ## 服务状态检查
 
 ```bash
@@ -351,6 +410,9 @@ pm2 logs dsh-web --lines 50
 
 # tenancy 插件
 curl -b cookie https://dsh.example.com/tenancy/whoami
+
+# 公开站点(P11,独立端口 3089)
+curl -sI http://127.0.0.1:3089/ | head -1   # 404 属正常(根无内容);监听失败=端口被占/配置未生效
 ```
 
 ---

@@ -163,6 +163,12 @@ chmod 640 /etc/caddy/dsh.env && chown -R caddy:caddy /etc/caddy
     proxy_set_header Host $host; proxy_read_timeout 86400s; }
   ```
 
+- **公开站点（可选，P11）**：若要让 `pub.example.com/<user>/<projectName>` 公开
+  成员构建产物，在 `examples/nginx/dsh.example.com.conf` 内新增一个公开站点
+  server 块（`server_name` 换成你的公开域名），把该域名转发到 `127.0.0.1:3089`
+  （dsh-tenancy 的匿名静态发布端口，不走 Caddy/Authelia）——参照该文件末尾的
+  示例块，并配置插件 `publicSitesHosts`。
+
 ### 5. dsh 侧确认
 
 确保 dsh 启动参数包含 `--trusted-host <你的域名>`。无需重启（除非改过参数）。

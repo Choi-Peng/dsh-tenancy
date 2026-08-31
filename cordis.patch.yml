@@ -36,3 +36,14 @@
         autheliaBin: /opt/authelia/authelia          # 生成 argon2id 哈希的 CLI
         invitesPath: ''                 # 空 → $DSH_HOME/tenancy/invites.json
                                         # ⚠ 多实例共享 $DSH_HOME 时必须逐实例唯一(同 dbPath 红线)
+        # ── P11:公开站点(pub.example.com/<user>/<projectName>)──
+        # 独立端口匿名静态发布:nginx/Caddy 把公开域名转发到 publicSitesPort,
+        # URL 的 <user>/<projectName> 映射到 memberWorkspaceRoot/<user>/<projectName>/<publicBuildDir>
+        # 的构建产物(无鉴权、只读;路径逐段校验 + realpath 双重围栏,详见 lib/sites.js)。
+        publicSitesEnabled: true        # 总开关(schema 默认 true;自测等裸配置调用方须显式置 true 才启动)
+        publicSitesHost: '127.0.0.1'    # 仅回环:公开域名由代理转发到此端口(勿绑 0.0.0.0)
+        publicSitesPort: 3089           # 公开站点端口(主站 3088 之外独立)
+        publicSitesHosts: []            # Host 白名单,生产建议 ['pub.example.com'](空=任意 Host)
+        publicBuildDir: dist            # 项目内构建输出子目录名
+        publicSpaFallback: true         # 无扩展名未命中回落 index.html(SPA 路由)
+        publicCacheControl: 'public, max-age=300'

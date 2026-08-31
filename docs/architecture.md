@@ -9,6 +9,7 @@
 浏览器 ── TLS ──▶ nginx :443
                     │  dsh.example.com ──▶ Caddy 127.0.0.1:9443(HTTP)
                     │  /auth/* ─────────▶ Authelia 127.0.0.1:9091(门户)
+                    │  pub.example.com ──▶ dsh-tenancy 公开站点 127.0.0.1:3089
                     ▼
         Caddy:forward_auth 问 Authelia → 注入 Remote-User/Groups
                普通路径: Host 固定为公网域名
@@ -133,6 +134,37 @@ SSH 隧道直连（无注入头）按 `localPrincipal` 处理（默认等同 adm
     清理间隔 6 小时，首次延迟 1 分钟启动。
   - fork 子会话继承父 access 时同时查 ACL store 和待注册表（父可能也尚未首 prompt）。
 
+#### P11 公开站点（匿名静态发布）
+
+独立端口（默认 `127.0.0.1:3089`）的**匿名只读静态服务**，与主站 3088 的 SPA /
+影子路由完全隔离（不注册 webServer 路由、不读身份头、不经 forward_auth）：
+
+```
+浏览器 ──TLS──▶ nginx(pub.example.com) ──▶ 127.0.0.1:3089(tenancy 公开站点)
+    pub.example.com/<user>/<projectName>[/<path>]
+        →  memberWorkspaceRoot/<user>/<projectName>/<publicBuildDir>(默认 dist)
+```
+
+- **URL 语义**：`<user>` 与 `<projectName>` 各为单段安全名；无尾斜杠的根请求
+  301 到尾斜杠（页面内相对资源依赖尾斜杠解析）；目录缺省 `index.html`；
+  未命中文件且末段无扩展名（路由形态）时按 `publicSpaFallback` 回落
+  `index.html`（SPA 客户端路由）。
+- **发布模型**：只要 `~/dsh/<user>/<projectName>/dist` 存在即为「已发布」——
+  无需额外标记步骤，构建完成即可访问；未构建的项目 404。
+- **路径安全**（`lib/sites.js`）：先按 `/` 切分再逐段 `decodeURIComponent`
+  校验——拒 `../`、编码分隔符（`%2F`/`%5C`）、NUL、隐藏段（点前缀）、
+  `node_modules`；落点经 realpath **双重围栏**：buildRoot 必须落在
+  memberRoot 内（挡 `~/dsh/alice → /etc` 这类用户目录符号链接外逃），请求文件
+  必须落在 buildRoot 内（挡 `dist → 兄弟项目/根外` 的符号链接错位）。
+- **Host 白名单**：`publicSitesHosts` 非空时仅接受列出的 Host（hostname 或
+  host:port），防代理侧 Host 错配；生产建议设为 `['pub.example.com']`。
+- **配置**：`publicSitesEnabled`（schema 默认 true）/ `publicSitesHost` /
+  `publicSitesPort` / `publicSitesHosts` / `publicBuildDir` / `publicSpaFallback` /
+  `publicCacheControl`。
+- **部署**：nginx 示例 `examples/nginx/dsh.example.com.conf` 把公开域名转发到
+  3089；Caddyfile 附「全流量走 Caddy」的可选块。公开站点**无鉴权**，绑定务必
+  留在回环地址，由代理转发。
+
 ## 安全模型
 
 ### 纵深防御层次
@@ -147,12 +179,14 @@ SSH 隧道直连（无注入头）按 `localPrincipal` 处理（默认等同 adm
 | L6 — 应用 ACL | tenancy 影子路由 + 旁车存储 | 会话级 owner/access 隔离 |
 | L7 — 事件流 | WS pump 逐帧过滤 | 未授权会话零帧泄漏 |
 | L8 — respond | rpcId 索引 + writable 校验 | 防止跨会话 respond |
+| L9 — 公开站点 | 独立端口只读 + 逐段校验 + realpath 双重围栏 + 可选 Host 白名单 | 只公开构建产物,源码/隐藏文件/符号链接逃逸一律 404 |
 
 ### 信任边界
 
 - **管理员**（`dsh-admins` 组或 SSH 隧道 local）：完全放行，可访问所有会话和管理功能
 - **普通成员**（`dsh-team` 组）：仅可见自己的会话 + 被授权的会话（team-read/team-rw/readers）
-- **未认证**：302 跳转 Authelia 登录页
+- **未认证**：302 跳转 Authelia 登录页；**公开站点**（P11，独立端口）对任何人不经
+  认证只读服务 `~/dsh/<user>/<projectName>/dist` 的构建产物
 
 ## 数据流
 

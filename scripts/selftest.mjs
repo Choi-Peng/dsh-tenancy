@@ -23,6 +23,7 @@ import { InviteStore, registerUser, rateLimitCheck, clientIpOf,
   hashArgon2, verifyAutheliaPassword, extractUserPasswordHash, replaceUserPasswordInYml, changeUserPassword } from '../lib/register.js';
 import { AuditLog } from '../lib/audit.js';
 import { apply as applyTenancy } from '../lib/index.js';
+import { createPublicSitesServer, parseSitePath, contentTypeFor, resolveSiteTarget } from '../lib/sites.js';
 
 let passed = 0;
 let failed = 0;
@@ -34,6 +35,17 @@ function assert(cond, name) {
   } else {
     failed += 1;
     console.error(`  ✗ ${name}`);
+  }
+}
+
+/** 轮询等待条件成立(公开站点 listen 是异步的)。 */
+async function waitFor(fn, timeoutMs = 3000, intervalMs = 25) {
+  const start = Date.now();
+  for (;;) {
+    const v = fn();
+    if (v !== undefined && v !== null && v !== false) return v;
+    if (Date.now() - start > timeoutMs) throw new Error(`waitFor 超时: ${fn.toString()}`);
+    await new Promise((r) => setTimeout(r, intervalMs));
   }
 }
 
@@ -669,6 +681,190 @@ console.log('⑧ 成员文件访问收窄到个人根(P10)');
   assert(sessD.status === 403, '无关用户经 cwd 到共享工作区被拒');
 
   if (gateDispose) gateDispose();
+  rmSync(dir, { recursive: true, force: true });
+}
+
+//#endregion
+
+//#region ⑨ 公开站点(P11):pub.example.com/<user>/<projectName> → 构建产物 dist
+
+console.log('⑨ 公开站点(P11)');
+{
+  const dir = tempDir('tenancy-selftest-sites-');
+  const pool = join(dir, 'pool');
+  const distA = join(pool, 'alice', 'myapp', 'dist');
+  mkdirSync(join(distA, 'assets'), { recursive: true });
+  mkdirSync(join(pool, 'bob', 'blog', 'build', 'assets'), { recursive: true });
+  writeFileSync(join(distA, 'index.html'), '<html><body>myapp</body></html>');
+  writeFileSync(join(distA, 'assets', 'app.js'), 'console.log(1)');
+  writeFileSync(join(distA, '.env'), 'SECRET=1'); // 隐藏文件,不应被服务
+  writeFileSync(join(pool, 'bob', 'blog', 'build', 'index.html'), '<html><body>blog</body></html>');
+  // 未构建项目(无 dist)→ 404
+  mkdirSync(join(pool, 'alice', 'nobuild'), { recursive: true });
+  writeFileSync(join(pool, 'alice', 'nobuild', 'index.html'), 'source');
+  // 符号链接逃逸:dist/sneaky → pool 外目录
+  const outside = join(dir, 'outside');
+  mkdirSync(outside, { recursive: true });
+  writeFileSync(join(outside, 'leak.txt'), 'leaked');
+  symlinkSync(outside, join(distA, 'sneaky'));
+  // 符号链接指向根内兄弟项目(dist → ../blog/build):根内但错位,也应拒
+  symlinkSync(join(pool, 'bob', 'blog', 'build'), join(distA, 'sibling'));
+
+  const auditLog = new AuditLog(join(dir, 'tenancy', 'audit.log'));
+  const sites = await createPublicSitesServer({
+    memberRoot: pool, buildDir: 'dist', port: 0, host: '127.0.0.1',
+    hostAllowlist: [], spaFallback: true, cacheControl: 'public, max-age=300',
+    audit: auditLog, logger: { info() {}, warn() {}, error() {} }
+  });
+  const base = `http://127.0.0.1:${sites.port}`;
+  const get = async (p, method = 'GET') => {
+    const res = await fetch(base + p, { redirect: 'manual', method });
+    const text = method === 'HEAD' ? '' : await res.text();
+    return {
+      status: res.status, text,
+      location: res.headers.get('location'),
+      type: res.headers.get('content-type'),
+      len: res.headers.get('content-length')
+    };
+  };
+
+  // 1) 基本发布 + 目录缺省 index
+  let r = await get('/alice/myapp/');
+  assert(r.status === 200 && r.text.includes('myapp') && r.type.startsWith('text/html'), 'GET /alice/myapp/ 返回 index.html');
+  // 2) 无尾斜杠 → 301 到尾斜杠(页面内相对资源依赖尾斜杠)
+  r = await get('/alice/myapp');
+  assert(r.status === 301 && r.location === '/alice/myapp/', 'GET /alice/myapp 301 到尾斜杠');
+  // 3) 静态资源带正确 content-type
+  r = await get('/alice/myapp/assets/app.js');
+  assert(r.status === 200 && r.type.startsWith('text/javascript') && r.text.includes('console.log'), '资源文件 content-type 正确');
+  // 4) 未构建(无 dist)→ 404
+  r = await get('/alice/nobuild/');
+  assert(r.status === 404, '无构建输出的项目 404(未发布)');
+  // 5) 隐藏文件不服务
+  r = await get('/alice/myapp/.env');
+  assert(r.status === 404, '隐藏文件不服务');
+  // 6) 路径穿越 → 404(URL 层已归一裸 ../,这里验编码与纯函数)
+  r = await get('/alice/myapp/%2e%2e/nobuild/');
+  assert(r.status === 404, '编码 ../ 拒绝');
+  r = await get('/..%2fetc%2fpasswd');
+  assert(r.status === 404, '根穿越拒绝');
+  // 7) 符号链接逃逸 → 404(指向根外 / 根内兄弟项目都拒)
+  r = await get('/alice/myapp/sneaky/leak.txt');
+  assert(r.status === 404, '符号链接指向根外拒绝');
+  r = await get('/alice/myapp/sibling/index.html');
+  assert(r.status === 404, '符号链接指向根内兄弟项目拒绝(buildRoot 围栏)');
+  // 8) HEAD 带头不含体;POST 405
+  const indexLen = Buffer.byteLength('<html><body>myapp</body></html>');
+  r = await get('/alice/myapp/', 'HEAD');
+  assert(r.status === 200 && r.text === '' && r.len === String(indexLen), 'HEAD 返回头不含体');
+  r = await get('/alice/myapp/', 'POST');
+  assert(r.status === 405, 'POST 405');
+  // 9) SPA 回落:无扩展名未命中 → index.html;带扩展名未命中 → 404
+  r = await get('/alice/myapp/some/route');
+  assert(r.status === 200 && r.text.includes('myapp'), '无扩展名未命中回落 index.html(SPA 路由)');
+  r = await get('/alice/myapp/assets/missing.js');
+  assert(r.status === 404, '带扩展名未命中不回落(404)');
+
+  // 10) 自定义 buildDir 实例(bob 的 blog 构建在 build/ 下)
+  const sites2 = await createPublicSitesServer({
+    memberRoot: pool, buildDir: 'build', port: 0, host: '127.0.0.1',
+    hostAllowlist: [], spaFallback: false, cacheControl: 'no-cache',
+    audit: null, logger: { info() {}, warn() {}, error() {} }
+  });
+  const base2 = `http://127.0.0.1:${sites2.port}`;
+  const r2 = await fetch(base2 + '/bob/blog/', { redirect: 'manual' });
+  assert(r2.status === 200 && (await r2.text()).includes('blog'), '自定义 buildDir 生效');
+  await sites2.dispose();
+
+  // 11) Host 白名单:非白名单 Host 拒、白名单 Host 放行(fetch 会强制改写 Host,用裸 http)
+  const { request } = await import('node:http');
+  const rawGet = (port, path, host) => new Promise((resolve, reject) => {
+    const req = request({ host: '127.0.0.1', port, path, method: 'GET', headers: host ? { host } : {} }, (res) => {
+      res.resume();
+      res.on('end', () => resolve(res.statusCode));
+    });
+    req.on('error', reject);
+    req.end();
+  });
+  const sites3 = await createPublicSitesServer({
+    memberRoot: pool, buildDir: 'dist', port: 0, host: '127.0.0.1',
+    hostAllowlist: ['pub.example.com'], spaFallback: true, cacheControl: 'no-cache',
+    audit: null, logger: { info() {}, warn() {}, error() {} }
+  });
+  assert((await rawGet(sites3.port, '/alice/myapp/', 'evil.example')) === 404, 'Host 白名单:非白名单 Host 拒');
+  assert((await rawGet(sites3.port, '/alice/myapp/', 'pub.example.com')) === 200, 'Host 白名单:白名单 Host 放行');
+  assert((await rawGet(sites3.port, '/alice/myapp/', 'pub.example.com:443')) === 200, 'Host 白名单:host:port 形式命中');
+  await sites3.dispose();
+
+  // 12) resolveSiteTarget 纯函数:未发布/越界返回 null,正常返回双落点
+  const parsed = parseSitePath('/alice/myapp/assets/app.js');
+  const t1 = resolveSiteTarget(pool, 'dist', parsed);
+  assert(t1 !== null && t1.targetReal === realpathSync(join(distA, 'assets', 'app.js')), 'resolveSiteTarget 正常落点');
+  assert(resolveSiteTarget(pool, 'dist', parseSitePath('/alice/nobuild/')) === null, 'resolveSiteTarget 未发布 → null');
+  assert(resolveSiteTarget(pool, 'dist', parseSitePath('/alice/myapp/sneaky/x')) === null, 'resolveSiteTarget 根外逃逸 → null');
+  assert(resolveSiteTarget(pool, 'dist', parseSitePath('/alice/myapp/sibling/x')) === null, 'resolveSiteTarget 根内错位 → null');
+  assert(resolveSiteTarget(null, 'dist', parsed) === null, 'resolveSiteTarget 无 memberRoot → null');
+
+  // 13) parseSitePath / contentTypeFor 纯函数边界
+  const p1 = parseSitePath('/alice/myapp/assets/x.js');
+  assert(p1?.user === 'alice' && p1?.project === 'myapp' && p1?.rest.join('/') === 'assets/x.js', 'parseSitePath 标准路径');
+  assert(parseSitePath('/alice') === null && parseSitePath('/') === null && parseSitePath('') === null, 'parseSitePath 段数不足/空拒绝');
+  assert(parseSitePath('/alice/myapp/..') === null, 'parseSitePath 裸点段拒绝');
+  assert(parseSitePath('/alice/myapp/%2e%2e') === null, 'parseSitePath 编码点段拒绝');
+  assert(parseSitePath('/alice/.env/x') === null && parseSitePath('/alice/myapp/node_modules/x') === null, 'parseSitePath 隐藏/黑名单段拒绝');
+  assert(parseSitePath('/alice/myapp/%2Fetc') === null && parseSitePath('/alice/myapp/a%5Cb') === null && parseSitePath('/alice/myapp/%00') === null, 'parseSitePath 编码分隔符/NUL 拒绝');
+  assert(parseSitePath('/alice/myapp/%zz') === null, 'parseSitePath 畸形转义拒绝');
+  assert(parseSitePath('/alice//myapp/')?.project === 'myapp', 'parseSitePath 连续斜杠容忍');
+  assert(contentTypeFor('a.html').startsWith('text/html') && contentTypeFor('A.JS').startsWith('text/javascript') && contentTypeFor('a.xyz') === 'application/octet-stream', 'contentTypeFor 扩展名映射');
+
+  await sites.dispose();
+  rmSync(dir, { recursive: true, force: true });
+}
+
+//#endregion
+
+//#region ⑩ 公开站点 apply() 接线:publicSitesEnabled=true → 钩子暴露 sitesPort 并可访问
+
+console.log('⑩ 公开站点 apply() 接线');
+{
+  const dir = tempDir('tenancy-selftest-sites-apply-');
+  const pool = join(dir, 'pool');
+  const dist = join(pool, 'alice', 'myapp', 'dist');
+  mkdirSync(dist, { recursive: true });
+  writeFileSync(join(dist, 'index.html'), '<html>apply-ok</html>');
+
+  const cfg = {
+    identityHeader: 'remote-user', groupsHeader: 'remote-groups',
+    sharedSecret: '', adminGroups: ['dsh-admins'], trustedHosts: [],
+    localPrincipal: 'local', localIsAdmin: true, defaultAccess: 'private',
+    hideEmptyWorkspaces: false, hardenRespond: false,
+    auditPath: join(dir, 'tenancy', 'audit.log'), dbPath: join(dir, 'tenancy', 'acl.json'),
+    memberWorkspaceRoot: pool, registerEnabled: false,
+    registerGroup: 'dsh-team', autheliaUsersPath: join(dir, 'users.yml'),
+    autheliaBin: '/nonexistent', invitesPath: join(dir, 'tenancy', 'invites.json'),
+    publicSitesEnabled: true, publicSitesHost: '127.0.0.1', publicSitesPort: 0,
+    publicSitesHosts: [], publicBuildDir: 'dist', publicSpaFallback: true,
+    publicCacheControl: 'no-cache'
+  };
+
+  const routes = new Map();
+  let gateDispose = null;
+  const ctxStub = {
+    logger: { info() {}, warn() {}, error() {} },
+    get() { return undefined; },
+    inject(deps, cb) { if (Array.isArray(deps) && deps.includes('settings')) cb({ settings: { register() {} } }); else if (cb) cb({}); },
+    effect(fn) { gateDispose = fn(); },
+    webServer: { register(route) { routes.set(route.path, route.handler); return () => routes.delete(route.path); } }
+  };
+  applyTenancy(ctxStub, cfg);
+
+  const port = await waitFor(() => globalThis.__dshTenancy?.sitesPort);
+  assert(typeof port === 'number' && port > 0, 'apply() 启动公开站点并暴露 sitesPort');
+  const res = await fetch(`http://127.0.0.1:${port}/alice/myapp/`, { redirect: 'manual' });
+  assert(res.status === 200 && (await res.text()).includes('apply-ok'), 'apply() 接线:公开站点可访问构建产物');
+
+  if (gateDispose) gateDispose();
+  assert(globalThis.__dshTenancy === undefined, 'teardown 清理 globalThis 钩子');
   rmSync(dir, { recursive: true, force: true });
 }
 

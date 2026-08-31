@@ -3,6 +3,37 @@
 > [!NOTE]
 > 本文档由 AI 生成,可能存在错误或遗漏,使用前请 review。
 
+## 2026-08-31
+
+### P11 — 公开站点:`pub.example.com/<user>/<projectName>` 公开工作区构建产物
+
+- **新增独立端口匿名静态发布服务**(`lib/sites.js`):默认监听
+  `127.0.0.1:3089`,与主站 3088 的 SPA/影子路由完全隔离(不注册 webServer 路由、
+  不读身份头、不经 forward_auth)。部署方把公开域名(如 `pub.example.com`)经
+  nginx/Caddy 转发到该端口,URL `/<user>/<projectName>` 即公开成员个人工作区
+  `memberWorkspaceRoot/<user>/<projectName>/<publicBuildDir>`(默认 `dist`)的构建产物。
+- **发布模型**:无需额外标记步骤——`~/dsh/<user>/<projectName>/dist` 存在即视为
+  已发布(构建完成即可访问);未构建项目 404。URL 无尾斜杠 301 到尾斜杠;目录缺省
+  `index.html`;未命中文件且末段无扩展名(路由形态)按 `publicSpaFallback` 回落
+  `index.html`(SPA 客户端路由)。
+- **路径安全**:先按 `/` 切分再逐段 `decodeURIComponent` 校验(拒 `../`、编码
+  分隔符 `%2F`/`%5C`、NUL、隐藏段、`node_modules`);realpath **双重围栏**——
+  buildRoot 必须落在 memberRoot 内(挡用户目录符号链接外逃),请求文件必须落在
+  buildRoot 内(挡 `dist → 兄弟项目/根外` 错位);仅 GET/HEAD;可选 Host 白名单
+  (`publicSitesHosts`,生产建议 `['pub.example.com']`)。
+- **配置**:`publicSitesEnabled`(schema 默认 true)/ `publicSitesHost` /
+  `publicSitesPort` / `publicSitesHosts` / `publicBuildDir` / `publicSpaFallback` /
+  `publicCacheControl`。非回环绑定、空 Host 白名单、memberRoot 未启用时打 WARN;
+  端口占用仅影响公开站点本身,不拖垮主插件。
+- **部署示例**:在 `examples/nginx/dsh.example.com.conf` 内新增公开站点 server 块
+  (nginx 直连 3089,无鉴权);`examples/Caddyfile` 末尾附「全流量走 Caddy」的可选块;
+  `install.sh` 生成的配置模板与 `cordis.patch.yml` 同步补全 P11 键。
+- 自测:`scripts/selftest.mjs` 新增 ⑨「公开站点(P11)」(真实 HTTP 服务冒烟:
+  发布/301/资源/未发布 404/隐藏文件/穿越/符号链接逃逸与根内错位/HEAD/405/SPA
+  回落/自定义 buildDir/Host 白名单/纯函数边界,41 项)与 ⑩「apply() 接线」
+  (`publicSitesEnabled=true` 经插件启动真实端口并暴露 `__dshTenancy.sitesPort`)。
+  全量 151/0。
+
 ## 2026-08-29
 
 ### P10 — 成员文件访问收窄到个人主工作区(`~/dsh/<userName>`)

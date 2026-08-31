@@ -533,6 +533,14 @@ deploy_dsh_plugin() {
     autheliaUsersPath: /etc/authelia/users.yml
     autheliaBin: /opt/authelia/authelia
     invitesPath: ''
+    publicSitesEnabled: true
+    publicSitesHost: '127.0.0.1'
+    publicSitesPort: 3089
+    publicSitesHosts:
+      - ${PUBLIC_DOMAIN:-pub.example.com}
+    publicBuildDir: dist
+    publicSpaFallback: true
+    publicCacheControl: 'public, max-age=300'
 PATCH_EOF
       ok "已写入 tenancy 配置覆盖 (sharedSecret 已同步)"
     else
