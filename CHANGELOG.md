@@ -269,11 +269,25 @@
   pending 中尚未首 prompt）
 - 无对话会话扫盘清理：启动 1 分钟后首次执行，之后每 6 小时扫描
   `$DSH_HOME/sessions` 下所有 project/session 目录，删除满足「mtime > 1 天
-  且 `session.jsonl` 无真实对话（≤1 行或不存在）」的会话文件夹；删除前清理
-  `pendingSessions` 残留条目，审计记录 `session.cleanup`
+  且 `session.jsonl.zstd`（或历史 `session.jsonl`）无真实对话（≤1 行或不存在）」
+  的会话文件夹；删除前清理 `pendingSessions` 残留条目，审计记录 `session.cleanup`
+  - **修复**：此前只查 `session.jsonl`，而实际磁盘格式是 zstd 压缩的
+    `session.jsonl.zstd`，导致所有会话被误判为无对话而删除。现已支持两种格式，
+    zstd 文件经 `zstd -c` 解压后统计行数。
+  - 清理后自动扫除 ACL 中的孤儿记录（`acl.cleanup`），防止用户管理中
+    显示已删除的会话（Title 丢失 → "Untitled session"）。
 - 清理使用并发锁（`cleanupRunning`）避免重叠执行，effect 销毁时清除定时器
 
 ### Bug 修复
+
+- **修复 session 清理误删有对话会话**：`cleanupStaleSessions()` 原先只查找
+  `session.jsonl`，但实际磁盘格式是 zstd 压缩的 `session.jsonl.zstd`，
+  `readFile` 永远 ENOENT 被空 catch 吞掉 → 所有会话均被判为"无对话"，
+  在 >1 天后被无差别删除，导致用户管理中大量会话丢失 Title（显示为
+  "Untitled session"）。现已拆分 `hasConversationIn()` 支持两种格式：
+  优先 `.zstd`（经 `zstd -c` 解压统计行数），回退 `.jsonl`；zstd 不可用或
+  解压失败时保守放行（不删）。新增 `cleanupOrphanAcl()` 在每次清理后
+  扫除 ACL 中的孤儿记录，防止历史误删残留。
 
 - **修复 workspace.list 过滤失效**：实测 RPC 响应信封为
   `{ result: { value: { items: [...], archivedSessionIds: [...] } } }`，

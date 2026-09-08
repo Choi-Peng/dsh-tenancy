@@ -130,8 +130,9 @@ SSH 隧道直连（无注入头）按 `localPrincipal` 处理（默认等同 adm
     首次 `session.prompt`（真实对话开始）时才落盘。只点 new session 不发消息的
     会话不产生 ACL 记录。
   - **无对话扫盘**：定期扫描 `$DSH_HOME/sessions/`，删除同时满足「目录 mtime
-    > 1 天」且「`session.jsonl` 仅有 header 行（无事件）」的会话文件夹。
-    清理间隔 6 小时，首次延迟 1 分钟启动。
+    > 1 天」且「`session.jsonl.zstd`（或历史 `session.jsonl`）仅有 header 行
+    （无事件）」的会话文件夹。清理间隔 6 小时，首次延迟 1 分钟启动。
+    清理后自动扫除 ACL 孤儿记录。
   - fork 子会话继承父 access 时同时查 ACL store 和待注册表（父可能也尚未首 prompt）。
 
 #### P11 公开站点（匿名静态发布）

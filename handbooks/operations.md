@@ -166,7 +166,8 @@ curl -b cookie -X POST https://dsh.example.com/tenancy/claim \
 ## 清理空会话
 
   > **自动清理已生效**：插件每 6 小时自动扫描 `$DSH_HOME/sessions/`，
-  > 删除 **1 天前 + 无对话**（`session.jsonl` 仅有 header 行）的会话文件夹。
+  > 删除 **1 天前 + 无对话**（`session.jsonl.zstd` 或历史 `session.jsonl`
+  > 仅有 header 行）的会话文件夹。清理后自动清除 ACL 中的孤儿记录。
   > 日常运维无需手动执行本章节；以下手动流程仅作补充或紧急修复使用。
 
 dsh 没有会话删除 API（只有归档 `workspace.archiveSession`）。清理「空会话」
