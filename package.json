@@ -1,6 +1,6 @@
 {
   "name": "@choi-p/dsh-tenancy",
-  "version": "0.1.0-alpha.1",
+  "version": "0.1.0-alpha.2",
   "description": "DSH single-instance multi-tenancy: proxy-identity extraction, session-level owner/access ACL over a sidecar store, shadow exact-routes gating session RPCs, and an event-frame filter hook for the client-connection patch.",
   "license": "MIT",
   "keywords": [
