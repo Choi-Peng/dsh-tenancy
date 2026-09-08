@@ -32,8 +32,18 @@ dsh 0.1.2 把核心 RPC 层从旧的 `apiProxy`/`toFetchHandler` 重写为 **Typ
     fail-closed)与下行 item 逐帧 `filterEvent`(未授权会话零帧泄漏)。支持的通道:
     `$events` 广播/waterfall ask 帧、`workspace/follow` 视图帧、`session/control`
     增量与 baseline(均按 agentId/sessionId 归属裁剪)。
-  - `dsh-client-connection` 补丁仅保留 **P5**(域名入口管理放行 `isLoopback`),
-    文件更名 `dsh-client-connection-0.1.2-rc.1.patch`。
+  - `dsh-client-connection` 补丁保留 **P5**(域名入口管理放行 `isLoopback`,client 端)
+    \+ 新增 **P5b**(服务端 `BrowserAuth` 旁路),文件更名
+    `dsh-client-connection-0.1.2-rc.1.patch`。
+  - **P5b — 新增 dsh 0.1.2 `BrowserAuth` 旁路(否则远程浏览器首屏 / 与
+    `/api/remote.mux` 全 401)**:0.1.2 起核心在 `requestRejection` / `authorizeIndex`
+    引入进程 launch-token + 签名 cookie(`dsh-auth-*`)的浏览器会话认证,经 Caddy/Authelia
+    进来的域名流量没有该 cookie 会被 401 挡在门外。P5b 在 `lib/index.js` 的
+    `requestRejection` 与 `authorizeIndex` 各加一条旁路:请求带 `X-Dsh-Tenancy-Key`
+    (非空,仅 Caddy upstream 请求上无条件注入、终端无法伪造)即视为已认证,免去 dsh 的
+    browser-session cookie;直连无头仍走 `BrowserAuth` 401。**注意**:该旁路按头「存在」
+    放行(不校验密钥值——`client-connection` 拿不到 tenancy 的 `sharedSecret`),故必须
+    保证 dsh 只经 Caddy 可达(绑 `127.0.0.1`),勿绑 `0.0.0.0`。
   - `globalThis.__dshTenancy` 钩子升到 **v3**:`principal` / `gateStream` / `filterEvent`
     (旧 v2 的 `deny`/`filterFrame` 已废弃)。
 - **`settingsNamespace` 助手移除**:0.1.2 起 `settings.register` 直接收 lowercase-hyphenated

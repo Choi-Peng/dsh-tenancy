@@ -5,6 +5,11 @@
 #   P2 — 事件帧过滤 + 流开闸(dsh-api-gateway 的 /api/remote.mux mux)→ lib/index.js
 #   P5 — 域名入口管理放行(client 浏览器端 isLoopback 放宽)
 #        → dsh-client-connection/lib/client.js
+#   P5b — 服务端 BrowserAuth 旁路(dsh 0.1.2+ 新增的进程 launch-token/签名 cookie):
+#        经 Caddy/Authelia 进来、带 X-Dsh-Tenancy-Key 头的请求直接视为已认证,
+#        免 dsh 的 browser-session cookie(否则远程浏览器首屏 / 与 /api/remote.mux
+#        全部 401);直连(无此头)仍走 BrowserAuth。→ dsh-client-connection/lib/index.js
+#        (requestRejection / authorizeIndex 两处旁路)
 # 附带预检:profile overlay 若存在未打补丁的 client-connection 副本(重复核心包,
 #   还会导致 agent-presets unscoped-context 报错)则拒绝继续并给出清理指引。
 #

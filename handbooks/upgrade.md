@@ -42,6 +42,26 @@ node -p "require('$TARGET/package.json').version"
 
 dsh 升级后，`client-connection` 可能被覆盖，补丁失效。需重新应用补丁。
 
+### ★ dsh 0.1.2+ 升级特别注意:BrowserAuth / token 401
+
+dsh 0.1.2 起核心引入 **`BrowserAuth`**(进程 launch-token + 签名 cookie `dsh-auth-*`)
+替代旧的 loopback 信任。域名访问(经 Caddy/Authelia 进来)的浏览器没有该 cookie,
+会在首屏 `/` 与 `/api/remote.mux`(整个 Remote 流)被 `requestRejection` 返回 **401**,
+表现就是「需要 token 才能访问」。
+
+本插件用 **P5b** 补丁(`dsh-client-connection` 的 `lib/index.js`)绕过:请求带
+`X-Dsh-Tenancy-Key`(Caddy 对所有路径 `header_up` 无条件注入的共享密钥头)即视为已认证。
+升级到 0.1.2+ 必须确认:
+
+1. `patches/dsh-client-connection-<NEW_VERSION>.patch` 含 P5b hunk(本仓库 0.1.2-rc.1
+   已含;若 `NEW_VERSION` 不同需 rebase,见下文)。
+2. **`trustedHosts` 必须含你的公网域名**(如 `['dsh.example.com']`)——`requestRejection`
+   先过 `isTrustedApiRequest`,Host 不在 trustedHosts 直接 403,旁路都到不了。
+3. **Caddy 对所有路径注入 `X-Dsh-Tenancy-Key`**(`examples/Caddyfile` 默认 `handle` 块
+   已含 `/` 与 `/api/remote.mux`;特权路径 / `/register` 块也已注入)——确有一处漏注就会 401。
+4. **dsh 只经 Caddy 可达(绑 `127.0.0.1`)**:P5b 按头「存在」放行(不校验密钥值,因
+   `client-connection` 拿不到 tenancy 的 `sharedSecret`),误绑 `0.0.0.0` 会让任何人带假头直连即得认证。
+
 ### 步骤
 
 ```bash
@@ -206,6 +226,7 @@ cp $TARGET/lib/client.js $TARGET/lib/client.js.orig
 # 4. 手动应用补丁到 client.js
 #    编辑 $TARGET/lib/client.js，找到 isLoopback 判定行
 #    在 isLoopbackHostname(pageLocation.hostname) 后追加 || (() => {...})()
+#    另见 index.js:requestRejection / authorizeIndex 两处加 X-Dsh-Tenancy-Key 旁路(P5b)
 
 # 5. 生成新补丁
 (
@@ -233,8 +254,8 @@ pm2 restart dsh-web
 
 ```bash
 # 检查补丁
-grep -q "__dshTenancy" $TARGET/lib/index.js && echo "index.js OK" || echo "index.js MISSING"
-grep -q "dsh-tenancy" $TARGET/lib/client.js && echo "client.js OK" || echo "client.js MISSING"
+grep -q "dsh-tenancy P5b" $TARGET/lib/index.js && echo "index.js (P5b) OK" || echo "index.js MISSING"
+grep -q "dsh-tenancy P5" $TARGET/lib/client.js && echo "client.js (P5) OK" || echo "client.js MISSING"
 ```
 
 ---
