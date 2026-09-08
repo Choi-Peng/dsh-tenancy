@@ -184,6 +184,8 @@ curl -s -X POST http://127.0.0.1:3088/tenancy/sysuser \
 | 审计出现 `sysuser.conflict` | 同名既有系统账号 home/shell 与约定不符,插件不接管不动文件;人工裁决 |
 | 审计出现 `sysuser.chown-partial` | 个人目录部分条目 chown 失败(见审计 detail);重放 `POST /tenancy/sysuser` |
 | GitHub 下载超时 | 用镜像前缀 `https://ghproxy.net/` |
+| 选模型/新建会话报 `agent-presets: refusing to compose an unscoped context; the scope key is what joins an agent to its preset`(`resume failed for session ...`) | profile 的 `node_modules/@deepseek-ai` 里被装进了与 dsh 内置同名的核心包副本(`dsh-scope`/`dsh-agent-presets`/`dsh-session` 等)——进程内同一份代码加载两遍,私有 `Symbol` 作用域标记跨副本不可见,`AgentPresets.mount` 把已作用域的 agent 上下文判成 unscoped。解法:删除 profile overlay 里**与内置树重复**的 `@deepseek-ai/*`(保留仅 overlay 独有的包,如 `dsh-client-ui-primitives`/`dsh-client-ui-slots`,以及作为第三方插件**正式依赖**的 `dsh-settings`/`schemastery` 等):`cd ~/.dsh/profiles/<name> && pnpm remove @deepseek-ai/<dups…> && pm2 restart dsh-web`。核对:`ls ~/.dsh/profiles/<name>/node_modules/@deepseek-ai/` 里不应出现 `dsh-scope`/`dsh-agent-presets`/`dsh-session`/`dsh-client-connection` 等内置核心。若重装后复发,检查是否用 `pnpm add @deepseek-ai/*@<版本>` 手工补齐过内置依赖 |
+| 清理重复后跑 `pnpm install`/`peers check` 报 `Issues with peer dependencies found`(第三方插件把 `@deepseek-ai/*` 声明为 peer,运行时由外层 base 树 `~/.dsh/profiles/node_modules` 提供,pnpm 看不到) | 让 pnpm 不再自动补装/告警这些 peer(否则 `auto-install-peers` 会把核心包又装回 overlay,复发改 bug):profile 的 `pnpm-workspace.yaml` 顶层加 `autoInstallPeers: false` 与 `peerDependencyRules.ignoreMissing: ['@deepseek-ai/*']`(pnpm ≥10 设置读 pnpm-workspace.yaml,不再读 package.json 的 `pnpm` 字段;`.npmrc` 里不要留 `auto-install-peers=true`)。改完 `pnpm install && pnpm peers check` 应输出 `No peer dependency issues found` |
 
 ---
 
