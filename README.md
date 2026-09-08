@@ -91,6 +91,11 @@ sudo bash install.sh --domain dsh.example.com
     （`skills/publish-web-app.md`）：DSH agent 编写/构建 Web 应用时自动遵循
     「产物放 `<项目>/dist/`、资源相对引用」的约定，含最简单免构建单
     `index.html` 的写法；该文件也可直接拷入 `~/.dsh/skills/` 使用
+11. **系统用户开通（P12）** — 新成员注册成功即创建**同名 Linux 系统用户**：
+    `nologin` shell + 无密码（shadow 固有锁定）+ 不进任何管理组 ⇒ **不可登录服务器**；
+    其唯一文件权限是个人工作区 `~/dsh/<user>`（dsh 以 root 运行时即
+    `/root/dsh/<user>`）：递归 chown + 目录 0700。幂等可重放；同名既有系统账号
+    不符时判 conflict 不接管；存量成员可经 `POST /tenancy/sysuser` 补建
 
 ---
 
@@ -134,6 +139,26 @@ systemctl restart authelia
 - 初始凭据由 `install.sh` 生成至 `/root/dsh-p0-credentials/`（chmod 700），
   登录后尽快改密
 
+### 系统用户(P12)
+
+注册成功时自动 `useradd -M -s /usr/sbin/nologin` 建同名账号(无密码、不进管理组
+⇒ 不可登录),并把 `~/dsh/<user>` 递归 chown 给它、目录 0700。相关操作:
+
+```bash
+# 查看某成员的系统账号(home 应为 /root/dsh/<user>,shell 应为 nologin)
+getent passwd alice
+
+# 为存量成员(功能启用前注册)补建账号与目录归属(SSH 隧道直连 3088 即 local admin)
+curl -s -X POST http://127.0.0.1:3088/tenancy/sysuser \
+  -H 'content-type: application/json' -d '{"username":"alice"}'
+```
+
+- 该账号**唯一**的文件权限是其个人工作区;后续由 root(dsh)在区内新建的文件
+  不会自动跟随归属,可重放上面的补建端点(幂等,全树重新 chown)
+- `/root` 常为 0750,系统用户无法穿越抵达个人目录——插件会在日志提示一次;
+  确需真实可访问时自行决策:`chmod o+x /root`(仅允许穿越、不可列目录)
+  或 `setfacl -m u:<user>:x /root`。插件**不会**擅改 /root 权限
+
 ---
 
 ## 故障排查
@@ -149,6 +174,9 @@ systemctl restart authelia
 | `/register` 打不开(302 跳门户) | Caddyfile 未放行 `/register` 公开路由 |
 | 登录页没有「邀请码注册」按钮 | nginx `/auth/` location 未加 sub_filter |
 | 注册报 `server-error` | 检查 dsh 进程对 `autheliaUsersPath` 可写、`autheliaBin` 存在可执行 |
+| 注册成功但没有系统账号 | `systemUserEnabled` 未开/进程非 root/找不到 nologin shell → 看启动 WARN;存量成员经 `POST /tenancy/sysuser` 补建 |
+| 审计出现 `sysuser.conflict` | 同名既有系统账号 home/shell 与约定不符,插件不接管不动文件;人工裁决 |
+| 审计出现 `sysuser.chown-partial` | 个人目录部分条目 chown 失败(见审计 detail);重放 `POST /tenancy/sysuser` |
 | GitHub 下载超时 | 用镜像前缀 `https://ghproxy.net/` |
 
 ---

@@ -3,6 +3,43 @@
 > [!NOTE]
 > 本文档由 AI 生成,可能存在错误或遗漏,使用前请 review。
 
+## 2026-09-02
+
+### P12 — 系统用户自动开通:注册 1:1 建同名 Linux 账号(不可登录,仅归属个人工作区)
+
+- **新模块 `lib/sysuser.js`**:注册成功后以同一用户名创建 Linux 系统账号——
+  `useradd --no-create-home --home-dir <个人工作区> --shell nologin --user-group`,
+  **不设密码**(shadow 固有 `!` 锁定)、不进任何管理组 ⇒ **不可登录服务器**
+  (密码登录、SSH、su 均不可用);该账号的**唯一**文件权限是其个人工作区
+  `memberWorkspaceRoot/<user>`(默认 `/root/dsh/<user>`):递归 chown
+  (node 实现,不跟随符号链接)+ 目录 0700。
+- **幂等与防误接管**:`getent passwd` 先查——已存在且 home/shell 与约定一致视为
+  本插件所建(复用其 uid/gid 重放 chown);home 或 shell 不符(nologin 之外)视为
+  **conflict**,不 chown、不动其任何文件,审计 `sysuser.conflict` 并告警。
+  useradd 组名冲突时回落 `--no-user-group` 重试一次;非 root 进程、围栏根未配置、
+  找不到 nologin shell 时整体降级为不启用(启动告警,注册主流程不受影响)。
+- **注册链路**:`registerUser` 成功后的副作用链变为「先 `provisionSystemUser`
+  (记审计 `sysuser.created/exists/conflict/fail`)→ 再 `createPersonalWorkspace`
+  (接收 uid/gid 做目录归属)」;两者皆尽力而为,失败不翻转注册结果。
+- **配置**:`systemUserEnabled`(schema 默认 **false**,模板与生产 profile 已启用)/
+  `systemUserShell`(默认 `/usr/sbin/nologin`,缺失回落 `/sbin/nologin` →
+  `/bin/false`)/ `systemUserChown`(默认 true)。
+- **穿越告警**:`/root` 常为 0750(缺 other-x),系统用户即使拥有
+  `/root/dsh/<user>` 也无法穿越抵达——检测祖先链缺 `other-x` 时告警一次/进程并给出
+  建议命令(`chmod o+x /root` 仅允许穿越不可列目录,或 `setfacl -m u:<user>:x /root`);
+  插件只提醒,**不擅改 /root 权限**。
+- **管理端补建**:`POST /tenancy/sysuser`(admin-only,body `{username}`)为存量
+  成员补建账号 + 目录归属(幂等可重放,conflict 返回 409),审计 `sysuser.ensure`。
+- **修复(部署实测发现)**:`createRegisterRoutes` 组装 `registerUser` 依赖时漏传
+  `provisionSystemUser` —— 注册链路静默跳过建号(管理端点与自测直调均正常,恰好
+  漏在 HTTP 接线一环)。已修复并新增 ③ 路由级回归(经 `/register/api` 真实 handler
+  断言钩子透传);生产端到端实测 `register.success → sysuser.created →
+  sysuser.chown → workspace.create` 全链路触发,自测 183/0。
+- 自测:`scripts/selftest.mjs` 新增 ⑪「P12 系统用户自动开通」(useradd 参数/幂等/
+  conflict/回落重试/错误诊断/not-root 全走注入 fake exec,绝不真实建号;递归 chown
+  用临时目录实测含符号链接不跟随;traversalBlockers 边界,22 项),③ 注册事务断言
+  「先建号、uid/gid 传入个人工作区创建」。全量 180/0。
+
 ## 2026-08-31
 
 ### P11 — 公开站点:`pub.example.com/<user>/<projectName>` 公开工作区构建产物

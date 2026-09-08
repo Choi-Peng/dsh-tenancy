@@ -10,6 +10,8 @@
 //   ⑥ P7 pending 读穿回归(影子路由级):new session 首条 prompt 落盘前,创建者
 //      的 models/history/selectModel 不再 403(修复「模型列表永卡 Refreshing…」
 //      与「Failed to load history HTTP 403」),WS 帧过滤同窗读穿,且不水平越权
+//   ⑪ P12 系统用户自动开通:解析/查询/幂等 useradd(注入 fake exec,绝不真实建号)、
+//      递归 chown(临时目录,root 下安全)与祖先穿越检查;注册链路先建号后建区
 // 用法:node scripts/selftest.mjs [--skip-slow](跳过 argon2 实测)
 
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync, symlinkSync, realpathSync, statSync } from 'node:fs';
@@ -19,9 +21,11 @@ import { confineToRoot, expandHomeDir, safeSegment, checkUsername, checkPassword
   sanitizeYamlScalar, normalizeInviteCode, usersYmlHasUser, buildUserBlock,
   isTrustedApiRequest, isLoopbackHost, safeDecode, recordReadable, recordWritable,
   workspaceSharedUsers, workspaceCreatable, workspaceVisible } from '../lib/util.js';
-import { InviteStore, registerUser, rateLimitCheck, clientIpOf,
+import { InviteStore, registerUser, rateLimitCheck, clientIpOf, createRegisterRoutes,
   hashArgon2, verifyAutheliaPassword, extractUserPasswordHash, replaceUserPasswordInYml, changeUserPassword } from '../lib/register.js';
 import { AuditLog } from '../lib/audit.js';
+import { parsePasswdLine, isNoLoginShell, resolveNologinShell, accountLookup,
+  ensureSystemUser, chownRecursive, traversalBlockers } from '../lib/sysuser.js';
 import { apply as applyTenancy } from '../lib/index.js';
 import { createPublicSitesServer, parseSitePath, contentTypeFor, resolveSiteTarget } from '../lib/sites.js';
 
@@ -132,19 +136,28 @@ console.log('③ 邀请码存储与注册事务');
 
   if (!skipSlow) {
     let wsAutoUser = null;
+    let wsAutoSysAccount;
+    const sysUserCalls = [];
     const deps = {
       store, audit,
       autheliaUsersPath: usersPath,
       autheliaBin: process.env.AUTHELIA_BIN || '/opt/authelia/authelia',
       group: 'dsh-team',
       actorHint: 'selftest',
-      // P9:注册成功后自动建个人工作区;此处记录触发,验证钩子接线
-      createPersonalWorkspace: async (u) => { wsAutoUser = u; return { workspaceId: 'ws-' + u, path: '/pool/' + u }; }
+      // P12:注册成功后先开通系统用户;此处记录触发,验证钩子接线
+      provisionSystemUser: async (u) => {
+        sysUserCalls.push(u);
+        return { status: 'created', uid: 4242, gid: 4242, home: `/pool/${u}`, shell: '/usr/sbin/nologin' };
+      },
+      // P9:注册成功后自动建个人工作区;此处记录触发,验证钩子接线(P12:接收 uid/gid)
+      createPersonalWorkspace: async (u, sysAccount) => { wsAutoUser = u; wsAutoSysAccount = sysAccount; return { workspaceId: 'ws-' + u, path: '/pool/' + u }; }
     };
 
     const r1 = await registerUser(deps, { username: 'alice', displayName: 'Alice "A"', email: 'a@b.cn', password: 'correct horse', invite: codes[0].code });
     assert(r1.ok === true, '正常注册成功');
     assert(wsAutoUser === 'alice', '注册成功后触发个人工作区创建(用户名为名)');
+    assert(sysUserCalls.join(',') === 'alice', 'P12:注册成功后触发系统用户开通(用户名为名)');
+    assert(wsAutoSysAccount?.uid === 4242 && wsAutoSysAccount?.gid === 4242, 'P12:系统用户 uid/gid 传给个人工作区创建(目录归属)');
     const text = readFileSync(usersPath, 'utf8');
     assert(text.includes('  alice:') && text.includes('$argon2id$') && text.includes('- dsh-team'), 'users.yml 已追加用户块(argon2id + 组)');
     assert(/displayname: "Alice A"/.test(text), 'displayname 引号已被清洗');
@@ -166,6 +179,28 @@ console.log('③ 邀请码存储与注册事务');
     // buildUserBlock 输出可被 YAML 缩进结构肉眼校验
     const block = buildUserBlock('dave', 'Dave', '', '$argon2id$k', 'dsh-team');
     assert(block.startsWith('\n  dave:\n') && block.includes('    groups:\n      - dsh-team') && !block.includes('email'), 'buildUserBlock 结构正确(email 空则省略)');
+
+    // ⑫回归:P12 HTTP 接线 —— createRegisterRoutes 必须把 provisionSystemUser 透传给
+    // registerUser(曾漏传导致线上注册静默不建系统用户;直调 registerUser 的 ③ 测不出)
+    const [e2eCode] = await store.create(1, 'tester', 'route-wiring');
+    let routeSysUser = null;
+    let routeWsArg;
+    const handler = createRegisterRoutes({
+      config: { autheliaUsersPath: usersPath, autheliaBin: process.env.AUTHELIA_BIN || '/opt/authelia/authelia', registerGroup: 'dsh-team' },
+      store, audit, logger: { warn() {}, error() {} },
+      isTrusted: () => true,
+      provisionSystemUser: async (u) => { routeSysUser = u; return { status: 'created', uid: 4243, gid: 4243 }; },
+      createPersonalWorkspace: async (u, sa) => { routeWsArg = sa; return { workspaceId: 'ws-route', path: '/pool/' + u }; }
+    });
+    const req = {
+      method: 'POST', headers: {}, url: '/register/api', socket: { remoteAddress: '127.0.0.1' },
+      async *[Symbol.asyncIterator]() { yield Buffer.from(JSON.stringify({ invite: e2eCode.code, username: 'router', password: 'another-pass-123' })); }
+    };
+    const res = { statusCode: 0, writeHead(c) { this.statusCode = c; }, end() {} };
+    await handler(req, res);
+    assert(res.statusCode === 200, `P12: /register/api 路由注册成功(status=${res.statusCode})`);
+    assert(routeSysUser === 'router', 'P12: 路由层透传 provisionSystemUser(注册触发系统用户开通)');
+    assert(routeWsArg?.uid === 4243, 'P12: 路由层把系统用户 uid/gid 传入个人工作区创建');
   }
 
   rmSync(dir, { recursive: true, force: true });
@@ -883,5 +918,112 @@ console.log('⑩ 公开站点 apply() 接线');
 
 //#endregion
 
+//#region ⑪ P12 系统用户自动开通
+
+console.log('⑪ P12 系统用户自动开通');
+{
+  // ——— 纯函数 ———
+  const line = parsePasswdLine('alice:x:1010:1010::/root/dsh/alice:/usr/sbin/nologin');
+  assert(line?.uid === 1010 && line?.gid === 1010 && line?.home === '/root/dsh/alice'
+    && line?.shell === '/usr/sbin/nologin', 'parsePasswdLine 解析 getent 输出');
+  assert(parsePasswdLine('broken-line') === null && parsePasswdLine('a:b:c:x:y:z') === null, 'parsePasswdLine 畸形行拒绝');
+
+  assert(isNoLoginShell('/usr/sbin/nologin') && isNoLoginShell('/sbin/nologin') && isNoLoginShell('/bin/false'),
+    'isNoLoginShell 认可 nologin/false 家族');
+  assert(!isNoLoginShell('/bin/bash') && !isNoLoginShell(undefined), 'isNoLoginShell 拒绝可登录 shell');
+
+  const existing = new Set(['/usr/sbin/nologin']);
+  assert(resolveNologinShell('/usr/sbin/nologin', (p) => existing.has(p)) === '/usr/sbin/nologin', 'resolveNologinShell 配置存在即用');
+  assert(resolveNologinShell('/opt/missing/nologin', (p) => existing.has(p)) === '/usr/sbin/nologin', 'resolveNologinShell 缺失时回落');
+  assert(resolveNologinShell('/x', () => false) === null, 'resolveNologinShell 全缺失返回 null');
+
+  // ——— accountLookup / ensureSystemUser(注入 fake exec,不真实建号)———
+  const passwd = new Map(); // 用户名 → passwd 行(fake 数据库,useradd 会写入)
+  const userLine = (uid, home, shell) => `u:x:${uid}:${uid}::${home}:${shell}`;
+  let useraddFails = 0; // >0 时前 N 次 useradd 抛错(模拟组名冲突等)
+  const useraddArgs = [];
+  const fakeExec = async (file, args) => {
+    if (file === 'getent') {
+      const line2 = passwd.get(args[1]);
+      if (!line2) { const e = new Error('No such key'); e.code = 2; throw e; }
+      return { stdout: `${line2}\n` };
+    }
+    if (file === 'useradd') {
+      useraddArgs.push(args);
+      if (useraddFails > 0) { useraddFails -= 1; const e = new Error('useradd failed'); e.stderr = `useradd: group ${args[args.length - 1]} exists`; throw e; }
+      const home = args[args.indexOf('--home-dir') + 1];
+      const shell = args[args.indexOf('--shell') + 1];
+      passwd.set(args[args.length - 1], userLine(4242, home, shell));
+      return { stdout: '' };
+    }
+    throw new Error(`unexpected cmd ${file}`);
+  };
+
+  const r0 = await accountLookup('nobody', fakeExec);
+  assert(r0 === null, 'accountLookup: getent 退出码 2 → 不存在');
+
+  const a1 = await ensureSystemUser({ username: 'u1', homeDir: '/root/dsh/u1', shell: '/usr/sbin/nologin', comment: 'dsh tenancy (u1)', exec: fakeExec });
+  assert(a1.status === 'created' && a1.uid === 4242 && a1.gid === 4242, 'ensureSystemUser: 新账号创建成功');
+  const cmd = useraddArgs[0];
+  assert(cmd.includes('--no-create-home') && cmd.includes('--home-dir') && cmd[cmd.indexOf('--home-dir') + 1] === '/root/dsh/u1'
+    && cmd[cmd.indexOf('--shell') + 1] === '/usr/sbin/nologin' && cmd.includes('--user-group') && !cmd.includes('-p'),
+    'useradd 参数:-M 建号带 home 字段但实际不建、nologin shell、同名主组、不设密码');
+  assert(a1.home === '/root/dsh/u1' && isNoLoginShell(a1.shell), '创建后回读:home/shell 与约定一致');
+
+  const a2 = await ensureSystemUser({ username: 'u1', homeDir: '/root/dsh/u1', shell: '/usr/sbin/nologin', exec: fakeExec });
+  assert(a2.status === 'exists' && a2.uid === 4242 && useraddArgs.length === 1, 'ensureSystemUser: 幂等重放不再 useradd');
+
+  const a3 = await ensureSystemUser({ username: 'u1', homeDir: '/other/home', shell: '/usr/sbin/nologin', exec: fakeExec });
+  assert(a3.status === 'conflict' && a3.home === '/root/dsh/u1', 'ensureSystemUser: 同名既有账号 home 不符 → conflict 不接管');
+
+  passwd.set('u2', userLine(4243, '/root/dsh/u2', '/bin/bash'));
+  const a4 = await ensureSystemUser({ username: 'u2', homeDir: '/root/dsh/u2', shell: '/usr/sbin/nologin', exec: fakeExec });
+  assert(a4.status === 'conflict' && !isNoLoginShell(a4.shell), 'ensureSystemUser: 既有账号 shell 可登录 → conflict');
+
+  useraddFails = 1;
+  const a5 = await ensureSystemUser({ username: 'u3', homeDir: '/root/dsh/u3', shell: '/usr/sbin/nologin', exec: fakeExec });
+  assert(a5.status === 'created' && useraddArgs.at(-1).includes('--no-user-group'), 'ensureSystemUser: 组名冲突时回落 --no-user-group 重试');
+
+  useraddFails = 99;
+  const a6 = await ensureSystemUser({ username: 'u4', homeDir: '/root/dsh/u4', shell: '/usr/sbin/nologin', exec: fakeExec });
+  assert(a6.status === 'error' && a6.reason === 'useradd-failed' && /group u4 exists/.test(a6.message), 'ensureSystemUser: 两次失败 → error 带诊断信息');
+
+  // not-root 分支(临时替换 process.getuid,测完还原)
+  const realGetuid = process.getuid;
+  process.getuid = () => 1000;
+  try {
+    const a7 = await ensureSystemUser({ username: 'u5', homeDir: '/root/dsh/u5', shell: '/usr/sbin/nologin', exec: fakeExec });
+    assert(a7.status === 'error' && a7.reason === 'not-root', 'ensureSystemUser: 非 root 直接拒绝');
+  } finally {
+    process.getuid = realGetuid;
+  }
+
+  // ——— chownRecursive(临时目录,root 下把归属改成 nobody(65534)后断言,清理仍由 root 完成)———
+  const dir = tempDir('tenancy-selftest-sys-');
+  mkdirSync(join(dir, 'home', 'nested'), { recursive: true });
+  writeFileSync(join(dir, 'home', 'nested', 'f.txt'), 'x');
+  mkdirSync(join(dir, 'outside'), { recursive: true });
+  writeFileSync(join(dir, 'outside', 'target.txt'), 'x');
+  symlinkSync(join(dir, 'outside', 'target.txt'), join(dir, 'home', 'link'));
+  const ch = await chownRecursive(join(dir, 'home'), 65534, 65534);
+  assert(ch.errors.length === 0 && ch.count >= 4, `chownRecursive: 全树成功(${ch.count} 项)`);
+  assert(statSync(join(dir, 'home')).uid === 65534 && statSync(join(dir, 'home', 'nested', 'f.txt')).uid === 65534,
+    'chownRecursive: 目录与嵌套文件归属已变更');
+  assert(statSync(join(dir, 'outside', 'target.txt')).uid === 0, 'chownRecursive: 符号链接未被跟随(外部目标归属不变)');
+  const ch2 = await chownRecursive(join(dir, 'no-such-dir'), 65534, 65534);
+  assert(ch2.errors.length === 1 && /ENOENT/.test(ch2.errors[0].message), 'chownRecursive: 根不存在 → 记错误不抛出');
+
+  // ——— 祖先穿越检查 ———
+  // 注:mkdtemp 根目录本身是 0700,也会被保守口径命中,故只断言「tight 命中、open 不命中」。
+  mkdirSync(join(dir, 'open'), { recursive: true, mode: 0o755 });
+  mkdirSync(join(dir, 'open', 'tight'), { recursive: true, mode: 0o700 });
+  const blocked2 = traversalBlockers(join(dir, 'open', 'tight', 'u'));
+  assert(blocked2.includes(join(dir, 'open', 'tight')) && !blocked2.includes(join(dir, 'open')),
+    'traversalBlockers: 仅报缺 other-x 的层,不误报开放层');
+
+  rmSync(dir, { recursive: true, force: true });
+}
+
+//#endregion
 console.log(`\n结果:${passed} 通过 / ${failed} 失败`);
 process.exit(failed > 0 ? 1 : 0);

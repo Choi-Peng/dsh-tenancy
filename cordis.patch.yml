@@ -36,6 +36,16 @@
         autheliaBin: /opt/authelia/authelia          # 生成 argon2id 哈希的 CLI
         invitesPath: ''                 # 空 → $DSH_HOME/tenancy/invites.json
                                         # ⚠ 多实例共享 $DSH_HOME 时必须逐实例唯一(同 dbPath 红线)
+        # ── P12:系统用户自动开通(注册 1:1 建号)──
+        # 新成员注册成功即创建同名 Linux 账号:useradd -M -s nologin,无密码(shadow 固有
+        # 锁定)、不进任何管理组 ⇒ 不可登录服务器;其唯一文件权限是个人工作区
+        # memberWorkspaceRoot/<user>(默认 /root/dsh/<user>):递归 chown + 目录 0700。
+        # 依赖 dsh 以 root 运行且有 useradd/getent;存量成员可经 POST /tenancy/sysuser 补建。
+        # 注意:/root 常为 0750,系统用户无法穿越抵达 —— 按需 chmod o+x /root(仅穿越、
+        # 不可列目录)或 setfacl -m u:<user>:x /root,插件只告警不擅改。
+        systemUserEnabled: true         # 总开关(schema 默认 false;需 root)
+        systemUserShell: /usr/sbin/nologin   # 不存在时回落 /sbin/nologin → /bin/false
+        systemUserChown: true           # 个人工作区递归 chown 给系统用户(目录 0700)
         # ── P11:公开站点(pub.example.com/<user>/<projectName>)──
         # 独立端口匿名静态发布:nginx/Caddy 把公开域名转发到 publicSitesPort,
         # URL 的 <user>/<projectName> 映射到 memberWorkspaceRoot/<user>/<projectName>/<publicBuildDir>

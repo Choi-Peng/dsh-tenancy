@@ -261,6 +261,55 @@ curl -b cookie -X POST https://dsh.example.com/tenancy/invites/revoke \
 
 ---
 
+## 系统用户（P12）：注册 1:1 建同名 Linux 账号
+
+功能开启（`systemUserEnabled: true`）后，新成员注册成功即自动创建**同名系统用户**：
+
+- `useradd --no-create-home --home-dir /root/dsh/<user> --shell /usr/sbin/nologin`
+- **无密码**（shadow 固有 `!` 锁定）、不进任何管理组、shell 为 nologin
+  ⇒ **不可登录服务器**（密码登录/SSH/su 均不可用）
+- 该账号**唯一**的文件权限是个人工作区 `/root/dsh/<user>`：递归 chown + 目录 0700
+
+### 查看与验证
+
+```bash
+# home 应为 /root/dsh/<user>,shell 应为 nologin;密码列应为 !(锁定)
+getent passwd alice
+grep '^alice:' /etc/shadow
+
+# 个人目录归属(应为 alice:alice,0700)
+ls -ld /root/dsh/alice
+
+# 注册相关审计
+grep 'sysuser' $DSH_HOME/tenancy/audit.log | jq .
+```
+
+### 为存量成员补建（幂等,可重放）
+
+功能启用前注册的成员、或当年注册时建号失败的,由管理员补建:
+
+```bash
+# SSH 隧道直连 3088 即 local admin(或带管理员 cookie 经域名访问)
+curl -s -X POST http://127.0.0.1:3088/tenancy/sysuser \
+  -H 'Content-Type: application/json' -d '{"username":"alice"}' | jq .
+# → {"ok":true,"username":"alice","account":{"status":"created|exists",...},"workspace":{...}}
+# 冲突(同名既有账号 home/shell 不符)返回 409,插件不接管、不动文件
+```
+
+### 注意事项
+
+- **/root 穿越**:个人目录在 `/root` 之下,而 `/root` 常为 0750(缺 other-x),
+  系统用户即使拥有 `/root/dsh/<user>` 也到不了——插件只在日志提醒一次
+  (每进程一次),是否放开由运维裁决:
+  `chmod o+x /root`(仅允许穿越、不可列目录)或 `setfacl -m u:<user>:x /root`。
+  插件**不会**擅改 /root 权限。
+- **归属维护**:之后由 root(dsh)在个人目录内新建的文件不会自动跟随归属;
+  重放补建端点即可全树重新 chown(`sysuser.chown-partial` 表示有部分失败,同样重放)。
+- **不做的**:不设/不重置系统口令、不加 sudo/wheel、不删号(移除成员请运维手工
+  `userdel -r` 并同步删 users.yml 条目)。
+
+---
+
 ## 审计日志
 
 审计日志位于 `$DSH_HOME/tenancy/audit.log`（JSONL 格式，5MB 自动轮转）。
@@ -279,6 +328,13 @@ curl -b cookie -X POST https://dsh.example.com/tenancy/invites/revoke \
 | `invite.revoke` | 撤销邀请码 |
 | `respond.deny` | respond 硬化拒绝 |
 | `session.cleanup` | 自动扫盘删除无对话会话文件夹 |
+| `register.success` / `register.fail` | 邀请码注册成功/失败 |
+| `sysuser.created` / `sysuser.exists` | P12 系统用户新建成功 / 已存在复用 |
+| `sysuser.conflict` | P12 同名既有系统账号 home/shell 不符,未接管 |
+| `sysuser.fail` | P12 useradd 失败(非 root/命令失败) |
+| `sysuser.chown` / `sysuser.chown-partial` / `sysuser.chown-fail` | P12 个人目录归属变更(全部/部分/失败) |
+| `sysuser.ensure` | P12 管理端手动补建 |
+| `workspace.create` | 注册后自动创建个人工作区 |
 
 ### 查看日志
 
