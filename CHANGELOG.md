@@ -5,6 +5,38 @@
 
 ## 2026-09-08(二)
 
+### 修复:公网域名反代下登录报 Failed to load plugins(Authelia 431)
+
+dsh 0.1.2 的 client-modules 把启动期插件打成组合 bundle 地址
+`/plugins/??<模块列表>&rev=<rev>`(单批 URL 可达 ~2.2KB,query 自身以 `?` 开头)。
+经 Caddy `forward_auth` 时该 query 被原样附加到 Authelia 鉴权子请求
+(`X-Forwarded-URI` 也携带全长 URL),请求行+请求头超过 Authelia 默认 4096B
+读缓冲 → **431 small read buffer** → 浏览器登录后首屏 "Failed to load plugins"/
+"bundle script /plugins/??… failed to load"。SSH 隧道直连不经 Authelia,故正常。
+
+- **修复**:`examples/authelia/configuration.yml` 的 `server:` 下新增
+  `buffers.read: 16384`(模板同步更新);线上把同段加到
+  `/etc/authelia/configuration.yml` 后 `validate-config` + `systemctl restart authelia`
+  即可,nginx/Caddy/dsh 均无需改动。
+- 文档:deployment.md「Authelia v4.39 关键点」、upgrade.md「dsh 0.1.2+ 特别注意」、
+  operations.md 故障排查新增对应条目。
+
+### 修复:公网域名 /tenancy 全 403(Signed in as: Loading…)与主 RPC WS 握手失败
+
+公网域名反代链路在 dsh 0.1.2 上的另两类故障(与上一节同批排障,线上已修复):
+
+- **`/tenancy/*` 与 `/register` 全 403 `untrusted request origin` → 设置页
+  "Signed in as: Loading…"、功能不可用**:插件影子路由自带 browser-trust 围栏,
+  经 Caddy 进来的 Host 恒为公网域名,必须写进插件配置的 `trustedHosts`(默认空 =
+  只认 loopback,所以 SSH 隧道正常)。修复:profile `cordis.patch.yml` 给
+  `id: tenancy` 配 `trustedHosts: ['<你的域名>']`;部署文档补「2b. 配置
+  trustedHosts」验收方式。
+- **页面能渲染但一直"连接异常"、会话模型无法加载**:0.1.2 主 RPC 是 WebSocket
+  `/api/remote.mux`,nginx 若只给旧的 events.mux/events.host/sidebar 配了升级头,
+  remote.mux 会落进普通 `location /api`,Upgrade 被剥 → 握手失败。修复:
+  `examples/nginx/dsh.example.com.conf` 与 deployment.md 补 `/api/remote.mux`
+  升级 location;operations.md/README 故障排查新增对应条目。
+
 ### 适配 dsh@0.1.2-rc.1(typert 重写:apiProxy 移除 + 事件流迁到 api-gateway mux)
 
 dsh 0.1.2 把核心 RPC 层从旧的 `apiProxy`/`toFetchHandler` 重写为 **Typert Remote**

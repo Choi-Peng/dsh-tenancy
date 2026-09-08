@@ -1,6 +1,16 @@
 # Authelia v4.39 — dsh.example.com 同域部署(门户挂载于 /auth 子路径)
 server:
   address: 'tcp://127.0.0.1:9091/auth'
+  # ★ dsh ≥ 0.1.2(client-modules 组合 bundle)必需:
+  #   启动期插件按整批请求 /plugins/??<模块列表>&rev=<rev>,单批 URL 可达 ~2.2KB;
+  #   Caddy forward_auth 的 uri 子指令会把原 query 原样附加到鉴权子请求
+  #   (X-Forwarded-URI 请求头也携带全长 URL),请求行+请求头会超过 Authelia 默认
+  #   4096B 读缓冲 → 431 "small read buffer" → 浏览器报 "Failed to load plugins"/
+  #   "bundle script ... failed to load"。SSH 隧道直连不经 Authelia,所以正常,
+  #   公网域名(经 Caddy/Authelia)必现。16384 留足余量;本文件不热重载,
+  #   改后必须 systemctl restart authelia。
+  buffers:
+    read: 16384
 log:
   level: info
 

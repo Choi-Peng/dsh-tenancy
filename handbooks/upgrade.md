@@ -61,6 +61,18 @@ dsh 0.1.2 起核心引入 **`BrowserAuth`**(进程 launch-token + 签名 cookie 
    已含 `/` 与 `/api/remote.mux`;特权路径 / `/register` 块也已注入)——确有一处漏注就会 401。
 4. **dsh 只经 Caddy 可达(绑 `127.0.0.1`)**:P5b 按头「存在」放行(不校验密钥值,因
    `client-connection` 拿不到 tenancy 的 `sharedSecret`),误绑 `0.0.0.0` 会让任何人带假头直连即得认证。
+5. **Authelia 读缓冲上调到 16KB**(0.1.2 client-modules 组合 bundle 引入):
+   0.1.2 把启动期插件打成单批地址 `/plugins/??<模块列表>&rev=<rev>`(可达 ~2.2KB),
+   Caddy `forward_auth` 会把原 query 原样附加到鉴权子请求,请求行+请求头超出
+   Authelia 默认 4096B 读缓冲 → 431 → 登录后首屏 `Failed to load plugins`/
+   `bundle script … failed to load`。在 `/etc/authelia/configuration.yml` 的
+   `server:` 下加 `buffers.read: 16384`(模板已含)并 `systemctl restart authelia`;
+   nginx / Caddy / dsh 均不用改。判断命令:`journalctl -u authelia -n 200 | grep 431`。
+6. **nginx 补 `/api/remote.mux` WS 升级 location**(0.1.2 api-gateway 引入):
+   0.1.2 的主 RPC 是 WebSocket `/api/remote.mux`(会话/模型/对话全走它),旧版的
+   events.mux/events.host 升级 location 不覆盖它。缺这一块 = 页面能渲染但一直
+   「连接异常」、会话模型无法加载。在 dsh vhost 加同款升级 location
+   (示例见 `examples/nginx/dsh.example.com.conf`),`nginx -t && nginx -s reload`。
 
 ### 步骤
 

@@ -519,6 +519,62 @@ curl -sI http://127.0.0.1:3089/ | head -1   # 404 属正常(根无内容);监听
 
 ## 故障排查与提示
 
+### 页面能渲染,但一直「连接异常」/ 会话模型无法加载
+
+**现象**:登录后 UI 能显示(Signed in as 正常),但连接指示灯异常、会话列表/模型
+目录等加载不出来。浏览器 DevTools 可见 `wss://…/api/remote.mux` 握手失败。
+
+**根因**(dsh ≥ 0.1.2):api-gateway 的主 RPC 改为 WebSocket `/api/remote.mux`
+多路复用,会话/模型/对话全走这条连接。若 nginx 只给 `/api/events.mux`、
+`/api/events.host`、`/sidebar/ws/` 配了升级头,`/api/remote.mux` 会落进普通
+`location ^~ /api/`,Upgrade 头被剥掉 → 握手必失败。
+
+**修复**:在 dsh vhost 补 `/api/remote.mux` 升级 location(与 events.mux 同款,
+示例见 `examples/nginx/dsh.example.com.conf` 与 deployment.md「接入 nginx」),
+然后 `nginx -t && nginx -s reload`,浏览器刷新:
+
+```nginx
+location /api/remote.mux { proxy_pass http://127.0.0.1:9443; proxy_http_version 1.1;
+  proxy_set_header Upgrade $http_upgrade; proxy_set_header Connection "upgrade";
+  proxy_set_header Host $host; proxy_read_timeout 86400s; }
+```
+
+### 登录(公网域名)后报 `Failed to load plugins` / `bundle script /plugins/??… failed to load`
+
+**现象**:SSH 隧道直连(`?token=`)一切正常;公网域名登录后首屏报
+`Failed to load plugins`、`failed to import loader entry … client-modules:
+bundle script /plugins/??@deepseek-ai/…client.js,…&rev=… failed to load`。
+
+**根因**(dsh ≥ 0.1.2 + Caddy forward_auth + Authelia 默认缓冲,与插件本身无关):
+0.1.2 的 client-modules 把启动期插件打成「组合 bundle」单批地址
+`/plugins/??<模块列表>&rev=<rev>`(全部 client 模块并列,单批 URL 可达 ~2.2KB,
+且 query 自身以 `?` 开头,属 dsh 设计格式)。Caddy `forward_auth` 的
+`uri /auth/api/authz/forward-auth` 子指令会把原请求 query 原样附加到鉴权
+子请求(请求头 `X-Forwarded-URI` 也携带全长 URL),于是 Authelia 收到的请求行
+变成 `/auth/api/authz/forward-auth??@deepseek-ai/…&rev=…`(2.2KB+),请求行+请求头
+超过 Authelia 默认 4096B 读缓冲 → **431 Request Header Fields Too Large**
+(`journalctl -u authelia` 可见 `small read buffer`)。隧道直连不经 Authelia,
+所以不受影响。
+
+**定位**:
+```bash
+journalctl -u authelia --since today | grep -E '431|read buffer'
+# → "Request from client exceeded the server read buffer … Buffer size=4096 …
+#    GET /auth/api/authz/forward-auth??@deepseek-ai/dsh-typert-registry/client.js,… 431"
+```
+
+**修复**(无需改 nginx / Caddy / dsh,模板 `examples/authelia/configuration.yml` 已含):
+```bash
+# /etc/authelia/configuration.yml
+# server:
+#   address: 'tcp://127.0.0.1:9091/auth'
+#   buffers:
+#     read: 16384          # ← 新增;请求行+头 ~5-6KB,16384 留足余量
+/opt/authelia/authelia validate-config --config /etc/authelia/configuration.yml
+systemctl restart authelia     # 本文件不热重载,必须重启
+```
+改完硬刷新页面即可;若旧 431 已把组合 bundle 标成失败,重启 dsh 会话或强刷一次。
+
 ### `settings are unavailable in this browser`
 
 dsh 配置面（模型/插件/凭证设置）默认仅限**回环浏览器**（hostname 为

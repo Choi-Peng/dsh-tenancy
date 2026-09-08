@@ -108,6 +108,15 @@ openssl rand -hex 32   # → identity_validation.reset_password.jwt_secret
   前提是服务器时钟准确（`timedatectl show-timesync --property=NTPSynchronized`）。
   注：规则里的 `methods:` 是 HTTP 方法过滤器，不是认证方式白名单（写错会被
   `validate-config` 直接拒）
+- **dsh ≥ 0.1.2 必配 `server.buffers.read: 16384`（模板已含）**：0.1.2 的
+  client-modules 把启动期插件打成「组合 bundle」地址
+  `/plugins/??<模块列表>&rev=<rev>`（单批可达 ~2.2KB）。经 Caddy
+  `forward_auth` 时该 query 会原样附加到 Authelia 鉴权子请求（请求头
+  `X-Forwarded-URI` 同样携带全长 URL），请求行+请求头超过 Authelia 默认 4096B
+  读缓冲 → **431 "small read buffer"** → 浏览器登录后首屏报 `Failed to load
+  plugins` / `bundle script /plugins/??… failed to load`。SSH 隧道直连不经
+  Authelia 所以正常，公网域名必现；`configuration.yml` 不热重载，改后必须
+  `systemctl restart authelia`（nginx / Caddy / dsh 均无需改动）
 - 权限：`configuration.yml`（含三个密钥）`600`、`users.yml`（含哈希/邮箱）`o-r`；
   收权前先确认 dsh 进程跑在哪个用户下（见 `operations.md`「确认 dsh 进程用户」），
   root 恒可写；非 root 用户需 `chmod g+w users.yml` + `usermod -aG authelia <dsh用户>`
@@ -154,6 +163,12 @@ chmod 640 /etc/caddy/dsh.env && chown -R caddy:caddy /etc/caddy
     proxy_set_header Upgrade $http_upgrade; proxy_set_header Connection "upgrade";
     proxy_set_header Host $host; proxy_read_timeout 86400s; }
   location /api/events.host { proxy_pass http://127.0.0.1:9443; proxy_http_version 1.1;
+    proxy_set_header Upgrade $http_upgrade; proxy_set_header Connection "upgrade";
+    proxy_set_header Host $host; proxy_read_timeout 86400s; }
+
+  # dsh ≥ 0.1.2 api-gateway 主 RPC WS：typert 全量 Remote(会话/模型目录/对话)都走它。
+  # 缺这一块 = 页面能渲染但一直「连接异常」、会话模型无法加载(见故障排查)。
+  location /api/remote.mux { proxy_pass http://127.0.0.1:9443; proxy_http_version 1.1;
     proxy_set_header Upgrade $http_upgrade; proxy_set_header Connection "upgrade";
     proxy_set_header Host $host; proxy_read_timeout 86400s; }
 

@@ -172,6 +172,9 @@ curl -s -X POST http://127.0.0.1:3088/tenancy/sysuser \
 | 症状 | 原因与解法 |
 |---|---|
 | forward_auth 全 400，Authelia 报 `insecure scheme` | Caddyfile 加 `servers { trusted_proxies static private_ranges }`，让 nginx 的 `X-Forwarded-Proto` 生效 |
+| 登录后报 `Failed to load plugins` / `bundle script /plugins/??… failed to load` | Authelia 默认 4096B 读缓冲被组合 bundle 的 forward_auth 子请求撑爆(431)；`server.buffers.read: 16384` 后重启 authelia(见 operations.md) |
+| 登录后设置页 `Signed in as: Loading…`、/tenancy/* 与 /register 全 403 `untrusted request origin`(仅 SSH 隧道正常) | profile `cordis.patch.yml` 里 tenancy 配置缺 `trustedHosts`(公网域名必填)；补上后 `pm2 restart dsh-web`(见 deployment.md「2b. 配置 trustedHosts」) |
+| 页面能渲染但一直「连接异常」、会话模型无法加载(`wss://…/api/remote.mux` 握手失败) | nginx 缺 `/api/remote.mux` WebSocket 升级 location(dsh ≥ 0.1.2 主 RPC 走它)；补上与 events.mux 同款 location 后 `nginx -s reload`(见 operations.md) |
 | `wrong argument count ... after '-Remote-Name'` | `header_up -X` 一行只能删一个字段，多字段拆成多行 |
 | Authelia 报 `missing host value` | forward_auth `uri` 忘了子路径前缀：应为 `/auth/api/authz/forward-auth` |
 | 非管理员也能调 settings.* | 缺少显式 deny 规则；检查规则顺序 |
