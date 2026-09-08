@@ -96,6 +96,12 @@ sudo bash install.sh --domain dsh.example.com
     其唯一文件权限是个人工作区 `~/dsh/<user>`（dsh 以 root 运行时即
     `/root/dsh/<user>`）：递归 chown + 目录 0700。幂等可重放；同名既有系统账号
     不符时判 conflict 不接管；存量成员可经 `POST /tenancy/sysuser` 补建
+12. **工作区共享（P9 + P13 深化）** — owner/admin 在侧栏把工作区「共享」给成员
+    （`/tenancy/workspaces/<id>/share` + UI 对话框）：共享用户在侧栏可见该工作区、
+    可在其中新建会话（agent 真实读写同一份文件），并可在共享工作区**浏览文件树/
+    建目录**（P13 放开，非共享路径仍钳回个人根）。共享工作区内**新建的会话默认
+    对参与者（owner+共享用户）可读**——共享前已建的会话保持私有、不追溯，owner
+    可随时把任意会话改回私有；写仍仅限 owner
 
 ---
 

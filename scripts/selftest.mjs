@@ -12,6 +12,8 @@
 //      与「Failed to load history HTTP 403」),WS 帧过滤同窗读穿,且不水平越权
 //   ⑪ P12 系统用户自动开通:解析/查询/幂等 useradd(注入 fake exec,绝不真实建号)、
 //      递归 chown(临时目录,root 下安全)与祖先穿越检查;注册链路先建号后建区
+//   ⑫ P13 共享工作区深化:共享前会话保持私有、共享后新建默认对参与者可读且可改回;
+//      共享工作区内的文件浏览/建目录对共享用户放行(个人根钳制外的第二有效根)
 // 用法:node scripts/selftest.mjs [--skip-slow](跳过 argon2 实测)
 
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync, symlinkSync, realpathSync, statSync } from 'node:fs';
@@ -20,7 +22,8 @@ import { dirname, join, basename } from 'node:path';
 import { confineToRoot, expandHomeDir, safeSegment, checkUsername, checkPassword, checkEmail,
   sanitizeYamlScalar, normalizeInviteCode, usersYmlHasUser, buildUserBlock,
   isTrustedApiRequest, isLoopbackHost, safeDecode, recordReadable, recordWritable,
-  workspaceSharedUsers, workspaceCreatable, workspaceVisible } from '../lib/util.js';
+  workspaceSharedUsers, workspaceCreatable, workspaceVisible, workspaceCoveringRecord,
+  workspaceDefaultSessionReaders } from '../lib/util.js';
 import { InviteStore, registerUser, rateLimitCheck, clientIpOf, createRegisterRoutes,
   hashArgon2, verifyAutheliaPassword, extractUserPasswordHash, replaceUserPasswordInYml, changeUserPassword } from '../lib/register.js';
 import { AuditLog } from '../lib/audit.js';
@@ -1025,5 +1028,163 @@ console.log('⑪ P12 系统用户自动开通');
 }
 
 //#endregion
+
+//#region ⑫ P13 共享工作区深化:默认共享新会话(创建时刻捕获)+ 共享工作区文件浏览放行
+
+console.log('⑫ 共享工作区深化(P13)');
+{
+  // ——— 纯函数 ———
+  assert(workspaceDefaultSessionReaders({ owner: 'alice', sharedUsers: ['bob', 'carol'] }, 'alice').sort().join(',') === 'bob,carol',
+    'workspaceDefaultSessionReaders: owner 建会话 → 默认可读者=共享用户');
+  assert(workspaceDefaultSessionReaders({ owner: 'alice', sharedUsers: ['bob'] }, 'bob').join(',') === 'alice',
+    'workspaceDefaultSessionReaders: 共享用户建会话 → 默认可读者=工作区 owner');
+  assert(workspaceDefaultSessionReaders({ owner: 'alice', sharedUsers: ['bob', 'carol'] }, 'dave')?.sort().join(',') === 'alice,bob,carol',
+    'workspaceDefaultSessionReaders: 参与者全量(去创建者)');
+  assert(workspaceDefaultSessionReaders({ owner: 'alice', sharedUsers: [] }, 'alice') === null, '未共享 → null(保持私有)');
+  assert(workspaceDefaultSessionReaders({ owner: 'alice', sharedUsers: ['alice'] }, 'alice') === null, '参与者只剩创建者 → null');
+  const wsMap = { w1: { path: '/p/a' }, w2: { path: '/p/a/sub' } };
+  assert(workspaceCoveringRecord(wsMap, '/p/a')?.path === '/p/a', 'workspaceCoveringRecord: 精确命中');
+  assert(workspaceCoveringRecord(wsMap, '/p/a/sub')?.path === '/p/a/sub', 'workspaceCoveringRecord: 最深覆盖命中');
+  assert(workspaceCoveringRecord(wsMap, '/p/a/sub/x')?.path === '/p/a/sub', 'workspaceCoveringRecord: 子路径命中最深');
+  assert(workspaceCoveringRecord(wsMap, '/p/b') === null && workspaceCoveringRecord(wsMap, '/p/a2') === null,
+    'workspaceCoveringRecord: 前缀不误命中(兄弟目录)');
+
+  // ——— 影子路由集成(复用 ⑦ 的 ctxStub/apiStub 骨架,会话/工作区 id 递增)———
+  const dir = tempDir('tenancy-selftest-p13-');
+  mkdirSync(join(dir, 'pool', 'alice'), { recursive: true });
+  mkdirSync(join(dir, 'pool', 'bob'), { recursive: true });
+
+  const cfg = {
+    identityHeader: 'remote-user', groupsHeader: 'remote-groups',
+    sharedSecret: '', adminGroups: ['dsh-admins'], trustedHosts: [],
+    localPrincipal: 'local', localIsAdmin: true, defaultAccess: 'private',
+    hideEmptyWorkspaces: false, hardenRespond: false,
+    auditPath: join(dir, 'tenancy', 'audit.log'), dbPath: join(dir, 'tenancy', 'acl.json'),
+    memberWorkspaceRoot: join(dir, 'pool'), registerEnabled: false,
+    registerGroup: 'dsh-team', autheliaUsersPath: join(dir, 'users.yml'),
+    autheliaBin: '/nonexistent', invitesPath: join(dir, 'tenancy', 'invites.json'),
+    publicSitesEnabled: false
+  };
+
+  let seq = 0;
+  let lastHostPayload = null;
+  const apiStub = {
+    sessions: {
+      create: async (r) => ({ rpcId: r.rpcId, result: { ok: true, value: { sessionId: `sess-${++seq}` } } }),
+      prompt: async (r) => ({ rpcId: r.rpcId, result: { ok: true, value: { accepted: true } } }),
+      history: async (r) => ({ rpcId: r.rpcId, result: { ok: true, value: { items: [] } } })
+    },
+    workspace: {
+      create: async (r) => {
+        const path = r.payload && r.payload.path;
+        const title = basename(path || '');
+        const wsId = `ws-${++seq}`;
+        return { rpcId: r.rpcId, result: { ok: true, value: { workspace: { workspaceId: wsId, path, title, sessionIds: [], archivedSessionIds: [], createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() }, created: true } } };
+      }
+    },
+    host: {
+      listDirectory: async (r) => { lastHostPayload = r.payload; return { rpcId: r.rpcId, result: { ok: true, value: { home: r.payload?.path ?? '', entries: [] } } }; },
+      createDirectory: async (r) => { lastHostPayload = r.payload; return { rpcId: r.rpcId, result: { ok: true, value: { path: join(r.payload?.path ?? '', r.payload?.name ?? '') } } }; }
+    }
+  };
+
+  const routes = new Map();
+  let gateDispose = null;
+  const ctxStub = {
+    logger: { info() {}, warn() {}, error() {} },
+    get(name) { return name === 'apiProxy' ? apiStub : undefined; },
+    inject(deps, cb) { if (Array.isArray(deps) && deps.includes('settings')) cb({ settings: { register() {} } }); else if (cb) cb({}); },
+    effect(fn) { gateDispose = fn(); },
+    webServer: { register(route) { routes.set(route.path, route.handler); return () => routes.delete(route.path); } }
+  };
+  applyTenancy(ctxStub, cfg);
+
+  function tenancyReq({ url, method = 'POST', body = null, user = 'alice', groups = 'dsh-team' }) {
+    const headers = { host: 'localhost:3088', origin: 'http://localhost:3088', 'content-type': 'application/json', 'remote-user': user, 'remote-groups': groups };
+    const buf = body === null ? null : Buffer.from(JSON.stringify(body));
+    return { method, url, headers, [Symbol.asyncIterator]() { let done = body === null; return { next: async () => (done ? { done: true, value: undefined } : (done = true, { done: false, value: buf })) }; } };
+  }
+  function tenancyRes() { return { __status: 0, body: '', setHeader() {}, writeHead(status) { this.__status = status; return this; }, end(chunk) { this.body = chunk ?? ''; } }; }
+  async function gateCall(path, method, payload, user = 'alice', groups = 'dsh-team') {
+    const req = tenancyReq({ url: path, body: { type: 'client-request', rpcId: `rpc-${++seq}`, method, payload }, user, groups });
+    const res = tenancyRes();
+    await routes.get(path)(req, res);
+    let parsed = null; try { parsed = JSON.parse(String(res.body)); } catch {}
+    return { status: res.__status, body: parsed ?? String(res.body) };
+  }
+  async function manageCall(path, body, user = 'alice') {
+    const req = tenancyReq({ url: path, body, user });
+    const res = tenancyRes();
+    await routes.get('/tenancy')(req, res);
+    let parsed = null; try { parsed = JSON.parse(String(res.body)); } catch {}
+    return { status: res.__status, body: parsed ?? String(res.body) };
+  }
+
+  // 1) alice/bob 各建个人工作区
+  assert((await gateCall('/api/workspace.create', 'workspace.create', { path: join(dir, 'pool', 'alice') }, 'alice')).status === 200, 'alice 建个人工作区');
+  assert((await gateCall('/api/workspace.create', 'workspace.create', { path: join(dir, 'pool', 'bob') }, 'bob')).status === 200, 'bob 建个人工作区');
+  const acl0 = JSON.parse(readFileSync(cfg.dbPath, 'utf8'));
+  const wsAliceId = Object.keys(acl0.workspaces).find((k) => acl0.workspaces[k].owner === 'alice');
+  const wsBobId = Object.keys(acl0.workspaces).find((k) => acl0.workspaces[k].owner === 'bob');
+
+  // 2) alice 在 ws-alice 建会话并首 prompt(此时尚未共享 → 私有)
+  const pre1 = await gateCall('/api/session.create', 'session.create', { workspaceId: wsAliceId }, 'alice');
+  const preSid = pre1.body?.result?.value?.sessionId;
+  assert(pre1.status === 200 && preSid, 'alice 建会话(共享前)');
+  assert((await gateCall('/api/session.prompt', 'session.prompt', { sessionId: preSid }, 'alice')).status === 200, 'alice 首 prompt 落盘');
+  const aclPre = JSON.parse(readFileSync(cfg.dbPath, 'utf8'));
+  assert((aclPre.sessions[preSid]?.readers ?? []).length === 0, '共享前创建的会话 readers=[]');
+
+  // 3) alice 把工作区共享给 bob
+  const share = await manageCall(`/tenancy/workspaces/${wsAliceId}/share`, { sharedUsers: ['bob'] }, 'alice');
+  assert(share.status === 200, 'alice 共享工作区给 bob');
+
+  // 4) 修改②-「共享前会话保持私有」:bob 读 alice 共享前的会话 → 403
+  const hPre = await gateCall('/api/session.history', 'session.history', { sessionId: preSid }, 'bob');
+  assert(hPre.status === 403, '共享前创建的会话对后加入的共享用户仍私有(403)');
+
+  // 5) 修改②-「共享后新建默认共享」:bob 在共享工作区建会话 → 默认可读者含 alice(owner)
+  const b1 = await gateCall('/api/session.create', 'session.create', { workspaceId: wsAliceId }, 'bob');
+  const bSid = b1.body?.result?.value?.sessionId;
+  assert(b1.status === 200 && bSid, '共享用户 bob 在共享工作区新建会话放行');
+  assert((await gateCall('/api/session.prompt', 'session.prompt', { sessionId: bSid }, 'bob')).status === 200, 'bob 首 prompt 落盘');
+  const aclB = JSON.parse(readFileSync(cfg.dbPath, 'utf8'));
+  assert((aclB.sessions[bSid]?.readers ?? []).includes('alice'), 'bob 新建会话默认含工作区 owner(alice)为读者');
+  assert((await gateCall('/api/session.history', 'session.history', { sessionId: bSid }, 'alice')).status === 200, 'alice(工作区 owner)可读 bob 在共享区的新会话');
+  assert((await gateCall('/api/session.history', 'session.history', { sessionId: bSid }, 'dave')).status === 403, '无关用户 dave 仍不可读');
+
+  // 6) alice 共享后新建会话 → 默认读者含 bob;owner 改回私有后 bob 变 403
+  const a1 = await gateCall('/api/session.create', 'session.create', { workspaceId: wsAliceId }, 'alice');
+  const aSid = a1.body?.result?.value?.sessionId;
+  assert((await gateCall('/api/session.prompt', 'session.prompt', { sessionId: aSid }, 'alice')).status === 200, 'alice 共享后新建会话');
+  assert((await gateCall('/api/session.history', 'session.history', { sessionId: aSid }, 'bob')).status === 200, '共享后 alice 新会话默认 bob 可读');
+  const priv = await manageCall(`/tenancy/sessions/${aSid}/acl`, { mode: 'private', readers: [], writers: [] }, 'alice');
+  assert(priv.status === 200, 'alice 把会话改回私有');
+  assert((await gateCall('/api/session.history', 'session.history', { sessionId: aSid }, 'bob')).status === 403, '改回私有后 bob 不可读');
+
+  // 7) 修改①-共享工作区文件浏览/建目录:bob 可浏览/建目录于 alice 共享工作区;
+  //    无关用户 dave 仍被钳回/拒绝
+  const poolA = join(dir, 'pool', 'alice');
+  const ldOk = await gateCall('/api/host.listDirectory', 'host.listDirectory', { path: poolA }, 'bob');
+  assert(ldOk.status === 200 && lastHostPayload.path === poolA, '共享用户可浏览共享工作区(路径未被钳回个人根)');
+  assert(ldOk.body?.result?.value?.home === poolA, 'listDirectory home 指向共享工作区根');
+  const cdOk = await gateCall('/api/host.createDirectory', 'host.createDirectory', { path: poolA, name: 'sub-dir' }, 'bob');
+  assert(cdOk.status === 200 && lastHostPayload.path === poolA && lastHostPayload.name === 'sub-dir', '共享用户可在共享工作区建目录');
+  const ldDave = await gateCall('/api/host.listDirectory', 'host.listDirectory', { path: poolA }, 'dave');
+  assert(ldDave.status === 200 && lastHostPayload.path === join(dir, 'pool', 'dave'), '无关用户浏览共享工作区仍被钳回本人根');
+  const cdDave = await gateCall('/api/host.createDirectory', 'host.createDirectory', { path: poolA, name: 'x' }, 'dave');
+  assert(cdDave.status === 403, '无关用户在共享工作区建目录被拒');
+
+  // 8) 自己未共享的工作区(bob 的)对 alice 不可浏览(不存在覆盖关系 → 个人根钳制)
+  const poolB = join(dir, 'pool', 'bob');
+  const ldAliceB = await gateCall('/api/host.listDirectory', 'host.listDirectory', { path: poolB }, 'alice');
+  assert(ldAliceB.status === 200 && lastHostPayload.path === join(dir, 'pool', 'alice'), '非共享他人工作区浏览仍钳回本人根');
+
+  if (gateDispose) gateDispose();
+  rmSync(dir, { recursive: true, force: true });
+}
+
+//#endregion
+
 console.log(`\n结果:${passed} 通过 / ${failed} 失败`);
 process.exit(failed > 0 ? 1 : 0);
