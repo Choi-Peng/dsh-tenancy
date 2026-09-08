@@ -778,6 +778,11 @@ console.log('⑨ 公开站点(P11)');
   // 4) 未构建(无 dist)→ 404
   r = await get('/alice/nobuild/');
   assert(r.status === 404, '无构建输出的项目 404(未发布)');
+  // 4b) 未发布根、无尾斜杠 → 直接 404(不再先 301):两段路径被外层代理误转到
+  //     本端口(如插件路由 /deepseek-balance/settings)时,响应语义保持诚实,
+  //     不被「先 301 尾斜杠、跟随后才 404」掩盖 —— P11 热修回归锚点。
+  r = await get('/alice/nobuild');
+  assert(r.status === 404 && r.location === null, '未发布根无尾斜杠直接 404(不先 301)');
   // 5) 隐藏文件不服务
   r = await get('/alice/myapp/.env');
   assert(r.status === 404, '隐藏文件不服务');

@@ -3,6 +3,41 @@
 > [!NOTE]
 > 本文档由 AI 生成,可能存在错误或遗漏,使用前请 review。
 
+## 2026-09-03(四)
+
+### 热修 — 公开站点两段路径劫持插件路由(deepseek-balance 余额不可用的根因)
+
+- **现象**:启用多租户部署后,dsh-deepseek-balance 侧栏余额读数失效
+  (显示错误提示或 `--`),设置卡片读不到/存不进;`/deepseek-balance` 与
+  `/deepseek-balance/settings` 直连 dsh-web(含域名 Host)均正常。
+- **根因**:nginx 层把公开站点(P11)的 `location ~ ^/[A-Za-z0-9_-]+/[A-Za-z0-9_-]+(/.*)?$`
+  内联进了 dsh vhost——所有**两段无点路径**被劫持到匿名站点端口 3089,绕过
+  Caddy/Authelia/dsh-web。`/deepseek-balance/settings` 正中该正则(单段的
+  `/deepseek-balance` 幸免);客户端在同一个 `Promise.all`/try 里解析两个响应,
+  settings 侧先抛错 ⇒ 健康的余额响应也不会被应用。同类暴露:`/footer-order/settings`
+  (此前的 `/plugins/` 劫持是同一类问题的第一次现身)。
+- **修复(部署侧,已即时生效)**:为 `/deepseek-balance`、`/footer-order`
+  增加 `^~` 前缀豁免回 Caddy 9443;reload nginx 后两路由恢复
+  302→Authelia→Caddy→dsh-web 的正常链路,公开站点路径不受影响。
+  ⚠ **第一版豁免踩了 nginx 固有行为的坑并已自纠**:写成带尾斜杠的
+  `location ^~ /deepseek-balance/` 后,nginx 对「以斜杠结尾的 prefix location
+  + proxy_pass」会在请求 URI 恰为该前缀但缺尾斜杠时直接 301 补斜杠——本体的
+  `GET /deepseek-balance` 被 301 到 `/deepseek-balance/` → dsh-web 404 空体,
+  settings 通了而余额读数仍显示 `--`。改为**不带尾斜杠**的前缀(同时覆盖裸
+  路径与子路径,不触发该 301)后全部恢复。
+- **修复(插件侧,纵深防御)**:`lib/sites.js` 尾斜杠 301 移到
+  `resolveSiteTarget` **之后**——未发布的两段根(含被误转的插件路由)直接
+  404(`not-published`),不再先 301 掩盖真实 404;已发布站点行为不变(先解析
+  成功再 301)。`scripts/selftest.mjs` 新增 4b 回归锚点,全量 215/0。
+- **修复(deepseek-balance 侧,纵深防御)**:①客户端把 settings 拉取改为
+  独立 best-effort(单独 try/catch,不与余额解析同 try)——settings 路由再被
+  任何层劫持/不可达时,余额读数照常渲染,只丢显示偏好;②余额 fetch/解析失败
+  且无历史读数时,显式展示失败原因(此前非 SyntaxError 的失败被静默吞掉,
+  侧栏只显示 `--`,排障无从下手——本次 `--` 之谜的直接教训)。
+- **文档**:`handbooks/deployment.md`(nginx 节新增「勿内联两段正则」警示 +
+  「豁免前缀勿带尾斜杠」警示 + 常见问题新行)、
+  `examples/nginx/dsh.example.com.conf`(P11 块头警示注释)。
+
 ## 2026-09-02(二)
 
 ### P13 — 共享工作区深化:共享区文件访问放行 + 新会话默认共享(创建时刻捕获)
