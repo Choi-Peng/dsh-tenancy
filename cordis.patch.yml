@@ -24,7 +24,7 @@
         localIsAdmin: true
         defaultAccess: private          # private | team-read | team-rw
         hideEmptyWorkspaces: true
-        hardenRespond: true             # P3:影子接管 /api/respond 做 rpcId→会话归属校验
+        hardenRespond: true             # P3:dsh 0.1.2 起硬化点迁到 /api/$events/result(ask 类事件 eventId→会话归属校验);旧版 ≤0.1.1 是 /api/respond
         auditPath: ''                   # 空 → $DSH_HOME/tenancy/audit.log
         dbPath: ''                      # 空 → $DSH_HOME/tenancy/acl.json
         memberWorkspaceRoot: '~/dsh'    # P4:非管理员成员的工作空间围栏根(支持 ~/ 展开);

@@ -3,6 +3,52 @@
 > [!NOTE]
 > 本文档由 AI 生成,可能存在错误或遗漏,使用前请 review。
 
+## 2026-09-08(二)
+
+### 适配 dsh@0.1.2-rc.1(typert 重写:apiProxy 移除 + 事件流迁到 api-gateway mux)
+
+dsh 0.1.2 把核心 RPC 层从旧的 `apiProxy`/`toFetchHandler` 重写为 **Typert Remote**
+(`typertGateway` 服务 + `/api/remote.mux` WebSocket 多路复用),端点命名也改为
+`<namespace>/<method>` 斜杠风格(旧 `session.history` → `session/page`、
+`session.models` → `session/modelCatalog`、`host.*` → `directoryPicker.*` 等)。
+插件同步适配如下:
+
+- **转发层重写**:`gatedHandler` 不再经 `apiProxy.toFetchHandler` 转发,改为复用核心
+  `connection` 服务的 `createSharedFetchHandler('/api')` —— 与核心 `/api` 前缀完全同一
+  分发语义(包括 `session.export` 这类非 typert 的 exact fetch 路由、以及 `gateway/`
+  业务错误骑在 `result.error` 上、HTTP 一律 200 的形态)。`peerDependencies` 把
+  `dsh-host-apiproxy` 换成 `dsh-api-gateway`(并升 `cordis`/`schemastery`/其余包版本)。
+- **端点表全面迁移**:`GATED_METHODS` / `READ_BY_SESSION` / `WRITE_BY_SESSION` /
+  `MEMBER_PATH_CONFINED` 全部改用斜杠端点;`sessionIdOf` 改为从 `payload.args`(typert
+  命名参数)解析,并支持 `address` 对象(session/page、session/follow)与深度≤3 的兜底扫描。
+- **`$events/result` 硬化(P3 迁移)**:旧的 `/api/respond` 门在 0.1.2 已被 ask 类事件
+  的应答端点取代——补丁改为硬化 `/api/$events/result`(`eventId` 须命中 `waterfall`
+  帧索引且会话可写,否则 403;语义同旧 `/api/respond`)。
+- **事件帧过滤迁到 api-gateway(P2 迁移)**:0.1.2 的 WS 下行 pump 从
+  `dsh-client-connection` 迁到 `dsh-api-gateway` 的 `/api/remote.mux` mux。补丁目标
+  随之迁移:
+  - 新增 `patches/dsh-api-gateway-0.1.2-rc.1.patch` —— 在 `RemoteStreamMuxServer`
+    升级处提取 `principal`、在 `RemoteStreamMuxConnection` 注入 `gateStream`(流开闸,
+    fail-closed)与下行 item 逐帧 `filterEvent`(未授权会话零帧泄漏)。支持的通道:
+    `$events` 广播/waterfall ask 帧、`workspace/follow` 视图帧、`session/control`
+    增量与 baseline(均按 agentId/sessionId 归属裁剪)。
+  - `dsh-client-connection` 补丁仅保留 **P5**(域名入口管理放行 `isLoopback`),
+    文件更名 `dsh-client-connection-0.1.2-rc.1.patch`。
+  - `globalThis.__dshTenancy` 钩子升到 **v3**:`principal` / `gateStream` / `filterEvent`
+    (旧 v2 的 `deny`/`filterFrame` 已废弃)。
+- **`settingsNamespace` 助手移除**:0.1.2 起 `settings.register` 直接收 lowercase-hyphenated
+  字符串,插件用普通字符串 `'tenancy'` 注册命名空间(自测桩同步改用
+  `connection` 而非 `apiProxy`)。
+- **patch 脚本改为双包版本化**:`scripts/apply-patches.sh` 按安装版本匹配
+  `patches/<pkg>-<version>.patch`,对 `dsh-client-connection` 与 `dsh-api-gateway` 各打一处;
+  幂等标记、`.pristine` 备份、profile overlay(unscoped-context)预检、失败回滚与语法校验
+  全部保留。`dsh ≤0.1.1` 需改用仓库历史版本(仅 client-connection 单包)。
+- 自测:`scripts/selftest.mjs` 全部转发桩改为 `connection` 共享 fetch handler 形态,
+  端点/args 形状、`session.export` 与 `$events/result` 硬化、WS 帧改为 `$events` 流
+  的 `emit`/`waterfall` 帧;新增 macOS tmpdir 符号链接 `realpath` 归一与 root-only 测试
+  (`sysuser`/`chownRecursive`)的 `getuid` 守卫,使全量自测在任意平台可跑(部署机以 root
+  运行仍全量通过)。全量 194/0(`--skip-slow` 跳过 authelia argon2 实测)。
+
 ## 2026-09-03(四)
 
 ### 热修 — 公开站点两段路径劫持插件路由(deepseek-balance 余额不可用的根因)

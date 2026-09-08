@@ -1,0 +1,11 @@
+--- a/lib/client.js
++++ b/lib/client.js
+@@ -4752,7 +4752,7 @@
+ 				publishState(void 0);
+ 			};
+ 			const handle = {
+-				isLoopback: transport?.ownsHost === true || pageLocation === void 0 || isLoopbackHostname(pageLocation.hostname),
++				isLoopback: transport?.ownsHost === true || pageLocation === void 0 || isLoopbackHostname(pageLocation.hostname) || /* [dsh-tenancy P5] 域名入口管理放行:同步问一次 /tenancy/whoami,仅 tenancy 报告 admin(即 Authelia 组含 dsh-admins)才视为可信;tenancy 未装/非 admin/请求失败一律 fail-closed,成员行为不变 */ (() => { try { if (typeof XMLHttpRequest === "undefined") return false; const xhr = new XMLHttpRequest(); xhr.open("GET", "/tenancy/whoami", false); xhr.send(null); return xhr.status === 200 && JSON.parse(xhr.responseText).admin === true; } catch { return false; } })(),
+ 				generation: {
+ 					getSnapshot: () => generation,
+ 					subscribe: (listener) => {

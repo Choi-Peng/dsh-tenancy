@@ -1,0 +1,65 @@
+--- a/lib/index.js
++++ b/lib/index.js
+@@ -227,7 +227,8 @@
+ 				this.missedHeartbeats.set(websocket, 0);
+ 			});
+ 			this.startHeartbeat();
+-			const done = new RemoteStreamMuxConnection(websocket, this.open, this.failure).run();
++			const principal = globalThis.__dshTenancy?.principal?.(req); // [dsh-tenancy P2] 升级握手提取代理身份
++			const done = new RemoteStreamMuxConnection(websocket, this.open, this.failure, principal).run();
+ 			this.connections.add(done);
+ 			done.then(() => {
+ 				this.connections.delete(done);
+@@ -273,10 +274,19 @@
+ 	failure;
+ 	streams = /* @__PURE__ */ new Map();
+ 	writes = Promise.resolve();
+-	constructor(socket, open, failure) {
++	constructor(socket, open, failure, principal) {
+ 		this.socket = socket;
+ 		this.open = open;
+ 		this.failure = failure;
++		this.principal = principal; // [dsh-tenancy P2] 该连接的代理身份(undefined=钩子缺失,行为与核心一致)
++	}
++	// [dsh-tenancy P2] 流开闸被拒:向该 streamId 回 error 帧且不打开上游流。
++	rejectStream(streamId) {
++		return Promise.resolve().then(() => this.send({
++			type: "error",
++			streamId,
++			error: { code: "gateway/forbidden", message: "stream denied by tenancy", details: {} }
++		})).catch(() => {});
+ 	}
+ 	async run() {
+ 		await new Promise((resolve) => {
+@@ -312,7 +322,9 @@
+ 			done: Promise.resolve()
+ 		};
+ 		this.streams.set(message.streamId, active);
+-		const done = this.pump(message.streamId, message.endpoint, message.payload, active);
++		// [dsh-tenancy P2] 流开闸:钩子存在且返回 false 时拒绝开流(fail-closed)。
++		const gate = this.principal === void 0 ? true : globalThis.__dshTenancy?.gateStream?.(this.principal, message.endpoint, message.payload);
++		const done = gate === false ? this.rejectStream(message.streamId) : this.pump(message.streamId, message.endpoint, message.payload, active);
+ 		active.done = done;
+ 		const remove = () => {
+ 			this.streams.delete(message.streamId);
+@@ -322,11 +334,15 @@
+ 	async pump(streamId, endpoint, payload, active) {
+ 		try {
+ 			const source = await this.open(endpoint, payload, active.abort.signal);
+-			for await (const value of source) await this.send({
+-				type: "item",
+-				streamId,
+-				value
+-			});
++			for await (const value of source) {
++				const filtered = this.principal === void 0 ? value : globalThis.__dshTenancy?.filterEvent?.(this.principal, endpoint, value); // [dsh-tenancy P2]
++				if (filtered === null) continue; // 帧被丢弃:未授权会话零帧泄漏
++				await this.send({
++					type: "item",
++					streamId,
++					value: filtered === void 0 ? value : filtered
++				});
++			}
+ 			if (!active.abort.signal.aborted) await this.send({
+ 				type: "end",
+ 				streamId
