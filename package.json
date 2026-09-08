@@ -49,7 +49,10 @@
     "@deepseek-ai/dsh-atomic-write": {
       "optional": false
     },
-    "@deepseek-ai/dsh-host-apiproxy": {
+    "@deepseek-ai/dsh-api-gateway": {
+      "optional": false
+    },
+    "@deepseek-ai/dsh-settings": {
       "optional": false
     }
   },
