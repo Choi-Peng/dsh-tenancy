@@ -187,9 +187,9 @@ chmod 640 /etc/caddy/dsh.env && chown -R caddy:caddy /etc/caddy
   `/user/project`。若不按示例用独立 server 块，而是在 dsh vhost 里用
   `location ~ ^/[A-Za-z0-9_-]+/[^/]+…` 之类正则分流到 3089，**dsh 插件自己的
   两段路由也会被劫持**（如 `/deepseek-balance/settings`、`/footer-order/settings`、
-  `/plugins/<id>/client.js`——浏览器侧余额读数、插件设置卡片、客户端 bundle 全部
-  失效）。确实要内联时，必须为每个插件路由前缀加 `^~` 前缀豁免（`^~` 优先于
-  正则），把它们仍转发回 Caddy `127.0.0.1:9443`。
+  `/dsh-restart/settings`、`/plugins/<id>/client.js`——浏览器侧余额读数、插件设置
+  卡片、重启按钮路由、客户端 bundle 全部失效）。确实要内联时，必须为每个插件路由
+  前缀加 `^~` 前缀豁免（`^~` 优先于正则），把它们仍转发回 Caddy `127.0.0.1:9443`。
 - **⚠ 豁免 location 必须写成不带尾斜杠的形式**（`location ^~ /deepseek-balance {…}`）：
   nginx 对「以斜杠结尾的 prefix location + proxy_pass」有固有行为——请求 URI
   恰好等于该前缀但缺尾斜杠时，nginx 直接回 301 补斜杠。写成
@@ -282,7 +282,7 @@ bash scripts/apply-patches.sh && pm2 restart dsh-web
 | Caddy 启动失败 | 运行 `caddy validate` 检查 Caddyfile |
 | 登录后跳不回 dsh | 检查 nginx 的 `proxy_set_header Host` 是否正确 |
 | 浏览器报 `WebSocket …/sidebar/ws/agent-terminals failed` | nginx 缺 `/sidebar/ws/` 升级 location（见「接入 nginx」） |
-| 插件两段路由 404/行为异常（如 deepseek-balance 侧栏余额不显示、`/deepseek-balance/settings` 或 `/footer-order/settings` 打不开） | 若把公开站点的两段正则 `location ~ ^/[^/]+/[^/]+…` 内联进了 dsh vhost，插件自身的两段路径会被劫持到 3089。为每个插件路由前缀加 `^~` 豁免回 Caddy（`/plugins/`、`/deepseek-balance`、`/footer-order` 等，见「接入 nginx」）；**豁免前缀勿带尾斜杠**（`^~ /deepseek-balance/` 会把本体 `GET /deepseek-balance` 301 到带斜杠变体 → 404，读数照样全灭） |
+| 插件两段路由 404/行为异常（如 deepseek-balance 侧栏余额不显示、`/deepseek-balance/settings`、`/footer-order/settings` 或 `/dsh-restart/settings` 打不开） | 若把公开站点的两段正则 `location ~ ^/[^/]+/[^/]+…` 内联进了 dsh vhost，插件自身的两段路径会被劫持到 3089。为每个插件路由前缀加 `^~` 豁免回 Caddy（`/plugins/`、`/deepseek-balance`、`/footer-order`、`/dsh-restart` 等，见「接入 nginx」）；**豁免前缀勿带尾斜杠**（`^~ /deepseek-balance/` 会把本体 `GET /deepseek-balance` 301 到带斜杠变体 → 404，读数照样全灭） |
 | 设置页报 `settings are unavailable in this browser` | 经域名访问且非 admin：dsh 配置面仅限回环/补丁放行；管理员需已应用补丁 |
 | 插件不生效 | 确认 `sharedSecret` 一致、补丁已应用、dsh 已重启 |
 
