@@ -3,6 +3,37 @@
 > [!NOTE]
 > 本文档由 AI 生成,可能存在错误或遗漏,使用前请 review。
 
+## 2026-09-17(四)
+
+### 修复:应答 agent 提问必定 403 → 前端「connection lost, retry #1」且提问永久挂起(P14)
+
+- **现象**:agent 调 `ask_user_question`(或任何 `approval/request`)后,在提问卡片上
+  提交答案,浏览器 console 打 `client.js:158 [connection] connection lost, retry #1`,
+  重连后提问仍在等待答案(卡片无法提交/超时),同一 `eventId` 反复被拒。
+- **根因(索引漏记)**:`/api/$events/result` 硬化门要求 `eventId` 命中 `rpcIndex`
+  (`filterEvent` 在下发 `waterfall` ask 帧时以 `noteRpc(eventId, agentId)` 填充),
+  但 `filterEvent` 里 `if (isAdminOf(principal)) return value;` 这条 **admin 整帧直通
+  旁路写在 `noteRpc` 之前** ⇒ 管理员主体的 ask 帧从不入索引 ⇒ 管理员自己提交答案时
+  被自己这道门 403 `rpcid-unknown-or-expired`。审计日志 38 条 `respond.deny` 全部是
+  `"actor":"admin"` + `reason:"rpcid-unknown-or-expired"`,与代码路径完全吻合
+  (成员路径因为不走该旁路而正常,所以只有 admin 中招)。
+- **次生放大(dsh 核心)**:403 让客户端 `connection.rpc.call('/api','$events/result')`
+  抛错,`dsh-api-gateway` 客户端 `pumpEvents` 把它当**流级致命错误**
+  (`failed.abort(error)`)⇒ 整条 `$events` 远端事件流被中止、连接层进入退避重连
+  (即上面那行日志),同时该流上所有在途提问被 abort 清空。故一次应答失败会连带
+  重连并让提问卡片从 UI 消失,直到服务端重投帧。
+- **修复**:`lib/index.js` 的 `filterEvent` 把 ask 帧登记(`noteRpc`)**前置到 admin
+  旁路之前**——凡本主体可见的 ask 帧一律登记;成员路径语义不变(仍 fail-closed:
+  未下发的 `eventId` 不入索引 ⇒ 应答 403)。
+- **回归锚点**:`scripts/selftest.mjs` ⑥ 段改用 `hardenRespond: true`,新增
+  「admin 应答自己可见的提问不再 403」「成员应答自己的提问放行」「未下发过的
+  eventId 仍 403」「他人会话的 eventId 仍 403」四条;把修复回退后第一条立即失败
+  (已验证锚点有效)。全量 **203/0**(`--skip-slow`)。
+- **遗留(上游 dsh 核心缺陷,插件侧未改写)**:单次应答 RPC 失败不应中止整条远端
+  事件流——`dsh-api-gateway/lib/client.js` 的 `pumpEvents` 在 `answer()` 失败时
+  `failed.abort(error)`。建议上游改为仅对该 `eventId` 报错;插件侧本次只消除触发
+  条件(403),不 patch 该行为。
+
 ## 2026-09-08(二)
 
 ### 修复:公网域名反代下登录报 Failed to load plugins(Authelia 431)

@@ -388,7 +388,8 @@ console.log('⑥ P7 pending 读穿回归(影子路由级)');
     localIsAdmin: true,
     defaultAccess: 'private',
     hideEmptyWorkspaces: true,
-    hardenRespond: false,
+    // P14 回归需要真实的 /api/$events/result 门(ask 应答 403 的现场)
+    hardenRespond: true,
     auditPath: join(dir, 'tenancy', 'audit.log'),
     dbPath: join(dir, 'tenancy', 'acl.json'),
     memberWorkspaceRoot: join(dir, 'pool'),
@@ -402,7 +403,9 @@ console.log('⑥ P7 pending 读穿回归(影子路由级)');
   // 上游 connection 替身(dsh 0.1.2 形态):端点 → result 窄形。
   const connectionStub = makeConnectionStub((endpoint, args) => {
     switch (endpoint) {
-      case 'session/create': return { ok: true, value: { sessionId: 'sess-1' } };
+      // 回显请求的 sessionId:同块内多个会话(sess-1/sess-2)各自登记 pending 归属
+      case 'session/create': return { ok: true, value: { sessionId: args?.sessionId ?? 'sess-1' } };
+      case '$events/result': return { ok: true, value: undefined };
       case 'session/page': return { ok: true, value: { records: [], hasMore: false } };
       case 'session/modelCatalog': return { ok: true, value: { current: { provider: 'dp', model: 'm1' }, routable: true, groups: [], failures: [] } };
       case 'session/selectModel': return { ok: true, value: { selected: { provider: 'dp', model: 'm1' } } };
@@ -454,8 +457,8 @@ console.log('⑥ P7 pending 读穿回归(影子路由级)');
       end(chunk) { this.body = chunk ?? ''; }
     };
   }
-  async function gateCall(path, method, payload, user = 'alice') {
-    const req = tenancyReq({ url: path, body: { type: 'client-request', rpcId: `rpc-${++rpcSeq}`, method, payload }, user });
+  async function gateCall(path, method, payload, user = 'alice', groups = 'dsh-team') {
+    const req = tenancyReq({ url: path, body: { type: 'client-request', rpcId: `rpc-${++rpcSeq}`, method, payload }, user, groups });
     const res = tenancyRes();
     await routes.get(path)(req, res);
     let parsed = null;
@@ -492,6 +495,33 @@ console.log('⑥ P7 pending 读穿回归(影子路由级)');
   const wf = { type: 'waterfall', event: 'approval/request', eventId: 'evt-1', agentId: 'sess-1', request: { toolName: 'bash' } };
   assert(tenancy.filterEvent(pa, '$events', wf) !== null, 'ask 帧对创建者放行');
   assert(tenancy.filterEvent(pb, '$events', wf) === null, 'ask 帧对他人丢弃');
+
+  // 3b) P14 回归:ask 应答门 /api/$events/result 的 eventId 索引必须对所有主体填充
+  // (含 admin —— 旧实现把 noteRpc 写在 admin 整帧直通之后,admin 自己应答提问
+  //  被本门 403 rpcid-unknown-or-expired:浏览器 console 打
+  //  「connection lost, retry #1」、提问永久挂起)。
+  const padm = tenancy.principal({ headers: { 'remote-user': 'root', 'remote-groups': 'dsh-admins' } });
+  // admin 的 ask 帧(会话 sess-1 属 alice):整帧直通
+  const wfAdm = { type: 'waterfall', event: 'user-questions/request', eventId: 'evt-admin', agentId: 'sess-1', request: { questions: [] } };
+  assert(tenancy.filterEvent(padm, '$events', wfAdm) !== null, 'ask 帧对 admin 直通');
+  const ansAdm = await gateCall('/api/$events/result', '$events/result',
+    { args: { clientId: 'c1', eventId: 'evt-admin', outcome: { kind: 'result' } } }, 'root', 'dsh-admins');
+  assert(ansAdm.status === 200, 'admin 应答自己可见的提问不再 403(rpcid 索引含 admin 帧)');
+  // 成员路径:alice 自己的会话 sess-2 的提问同样可应答
+  const evAlice = { type: 'waterfall', event: 'user-questions/request', eventId: 'evt-alice', agentId: 'sess-2', request: { questions: [] } };
+  // 成员路径:新建 sess-2(pending 归属 alice),其提问同样可应答
+  await gateCall('/api/session/create', 'session/create', { args: { sessionId: 'sess-2' } });
+  assert(tenancy.filterEvent(pa, '$events', evAlice) !== null, 'ask 帧对会话创建者(成员)放行');
+  const ansAlice = await gateCall('/api/$events/result', '$events/result',
+    { args: { clientId: 'c1', eventId: 'evt-alice', outcome: { kind: 'result' } } }, 'alice');
+  assert(ansAlice.status === 200, '成员应答自己的提问放行');
+  // fail-closed 方向不变:从未下发给该主体的 eventId、以及非本会话的 eventId 仍 403
+  const ansUnknown = await gateCall('/api/$events/result', '$events/result',
+    { args: { clientId: 'c1', eventId: 'evt-never-delivered', outcome: { kind: 'result' } } }, 'alice');
+  assert(ansUnknown.status === 403, '未下发过的 eventId 仍 403(fail-closed 不变)');
+  const ansCross = await gateCall('/api/$events/result', '$events/result',
+    { args: { clientId: 'c1', eventId: 'evt-admin', outcome: { kind: 'result' } } }, 'bob');
+  assert(ansCross.status === 403, '他人会话的 eventId 仍 403(不水平越权)');
 
   // 4) 无水平越权:他人读 pending 会话仍 403
   const hb = await gateCall('/api/session/page', 'session/page', { args: { address: { kind: 'session', sessionId: 'sess-1' } } }, 'bob');
