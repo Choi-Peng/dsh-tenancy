@@ -82,9 +82,17 @@ SSH 隧道直连（无注入头）按 `localPrincipal` 处理（默认等同 adm
 
 #### 事件帧过滤
 
-通过 `globalThis.__dshTenancy` 钩子暴露同步接口（`principal` / `filterFrame`），
-配合 `patches/` 下的补丁在 client-connection 的 WebSocket downlink pump 处逐帧过滤。
+通过 `globalThis.__dshTenancy` 钩子暴露同步接口（`principal` / `gateStream` /
+`filterEvent`），配合 `patches/` 下的补丁在 **dsh-api-gateway** 的
+`RemoteStreamMuxConnection`(即 `/api/remote.mux` WebSocket 流多路复用)的
+流开闸与下行 item 处逐帧过滤(dsh 0.1.5-rc.2 起该类已从 client-connection 迁移至此)。
 未授权会话零帧泄漏，包括内嵌 sessionId 的 workspace/归档视图帧也会被克隆裁剪。
+
+> **dsh 0.1.5-rc.2 变更**：旧版(≤0.1.2-rc.1)的下行帧过滤走
+> `dsh-client-connection` 的 `pump(socket, frames, abort)`(+ `filterFrame` 钩子)，
+> 新版该 pump 已移除，过滤逻辑随 `RemoteStreamMuxConnection` 一起迁到
+> `dsh-api-gateway/lib/index.js`，钩子名也由 `filterFrame` 改为 `filterEvent`。
+> 详见 `handbooks/upgrade.md` 的「dsh 0.1.5-rc.2 适配」。
 
 #### respond 硬化
 
@@ -178,7 +186,7 @@ SSH 隧道直连（无注入头）按 `localPrincipal` 处理（默认等同 adm
 | L4 — 特权路径 | Caddy Host→localhost 重写 + Authelia deny | 非管理员无法触达 settings/credentials |
 | L5 — 客户端围栏 | dsh `isLoopback` 判定 + 补丁 | 域名浏览器默认不可见配置面；仅对 `dsh-admins` 放行 |
 | L6 — 应用 ACL | tenancy 影子路由 + 旁车存储 | 会话级 owner/access 隔离 |
-| L7 — 事件流 | WS pump 逐帧过滤 | 未授权会话零帧泄漏 |
+| L7 — 事件流 | api-gateway `RemoteStreamMuxConnection` 逐帧 `filterEvent` | 未授权会话零帧泄漏 |
 | L8 — respond | rpcId 索引 + writable 校验 | 防止跨会话 respond |
 | L9 — 公开站点 | 独立端口只读 + 逐段校验 + realpath 双重围栏 + 可选 Host 白名单 | 只公开构建产物,源码/隐藏文件/符号链接逃逸一律 404 |
 
@@ -199,14 +207,17 @@ SSH 隧道直连（无注入头）按 `localPrincipal` 处理（默认等同 adm
   → dsh 核心处理 → tenancy 响应过滤 → 浏览器
 ```
 
-### WebSocket 事件流
+### WebSocket 事件流(dsh 0.1.5-rc.2)
 
 ```
-浏览器 → nginx → Caddy → dsh WS 升级
-  → 补丁: principal(req) 记录主体
-  → downlink pump 循环: filterFrame(principal, frame) 逐帧过滤
+浏览器 → nginx → Caddy → dsh WS 升级(/api/remote.mux)
+  → 补丁: principal(req) 记录主体(P2)
+  → RemoteStreamMuxConnection.stream 开闸: gateStream(principal, endpoint, payload)
+  → pump 循环: filterEvent(principal, endpoint, value) 逐帧过滤
   → 仅放行帧到达浏览器
 ```
+
+> 旧版(≤0.1.2-rc.1)的 `downlink pump + filterFrame` 已随架构重组移除，见上方架构说明。
 
 ### 邀请码注册
 

@@ -10,6 +10,14 @@
 #        免 dsh 的 browser-session cookie(否则远程浏览器首屏 / 与 /api/remote.mux
 #        全部 401);直连(无此头)仍走 BrowserAuth。→ dsh-client-connection/lib/index.js
 #        (requestRejection / authorizeIndex 两处旁路)
+#
+# ── dsh 0.1.5-rc.2 架构重组(2026-09-18)──────────────────────────
+#   0.1.5-rc.2 把 RemoteStreamMuxConnection 从 dsh-client-connection 迁到
+#   dsh-api-gateway,并移除了 client-connection 的下行帧 pump(+ filterFrame 钩子)。
+#   补丁已按新路径拆分:
+#     patches/dsh-api-gateway-0.1.5-rc.2.patch      → P2(api-gateway/lib/index.js)
+#     patches/dsh-client-connection-0.1.5-rc.2.patch → P5+P5b(client-connection)
+#   旧 patches/(0.1.1-rc.2 / 0.1.2-rc.1)保留给旧版 dsh 用户(版本通配自动匹配)。
 # 附带预检:profile overlay 若存在未打补丁的 client-connection 副本(重复核心包,
 #   还会导致 agent-presets unscoped-context 报错)则拒绝继续并给出清理指引。
 #

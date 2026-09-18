@@ -40,7 +40,36 @@ node -p "require('$TARGET/package.json').version"
 
 ## dsh 升级
 
-dsh 升级后，`client-connection` 可能被覆盖，补丁失效。需重新应用补丁。
+dsh 升级后，`client-connection` 与 `api-gateway` 可能被覆盖，补丁失效。需重新应用补丁。
+
+### ★ dsh 0.1.5-rc.2 适配(2026-09-18)
+
+dsh 0.1.5-rc.2 对核心包做了一次**架构重组**，补丁需要相应适配：
+
+| 变更 | 旧版(≤0.1.2-rc.1) | 新版(0.1.5-rc.2) |
+|---|---|---|
+| `RemoteStreamMuxConnection`(流多路复用) | 在 `dsh-client-connection/lib/index.js` | **迁到** `dsh-api-gateway/lib/index.js` |
+| `requestRejection` / `authorizeIndex`(HTTP 认证门) | 在 `dsh-client-connection/lib/index.js` | **仍留在** `dsh-client-connection/lib/index.js`(api-gateway 通过 `connection.requestRejection` 委托调用) |
+| 下行帧 `pump(socket, frames, abort)`(+ `filterFrame` 钩子) | 在 `dsh-client-connection/lib/index.js` | **已移除**；事件帧过滤迁到 api-gateway 的 `RemoteStreamMuxConnection.pump`(经 `filterEvent` 钩子) |
+
+**适配动作**(已做，无需用户操作)：
+
+1. 新增 `patches/dsh-api-gateway-0.1.5-rc.2.patch` —— P2 流开闸/事件帧过滤(内容与
+   `dsh-api-gateway-0.1.2-rc.1.patch` 相同，因 `RemoteStreamMuxConnection` 在新旧版中
+   代码未变，补丁直接适用)。
+2. 新增 `patches/dsh-client-connection-0.1.5-rc.2.patch` —— P5 域名入口 whoami 放行 +
+   P5b `X-Dsh-Tenancy-Key` 旁路(内容与 `dsh-client-connection-0.1.2-rc.1.patch` 相同，
+   行号有偏移但 `patch --forward` 可自动适配)。
+3. **删除** `patches/dsh-client-connection-0.1.1-rc.2.patch` —— 它打的 `pump`/`filterFrame`
+   与旧版 `isLoopback`(无 `transport?.ownsHost`)在 0.1.5-rc.2 中已不存在，保留只会让
+   旧版用户(≤0.1.1)用历史版本脚本(见下)。
+4. `apply-patches.sh` **无需修改** —— 它按 `patches/<pkg>-<VERSION>.patch` 通配匹配，
+   装 0.1.5-rc.2 就自动用新补丁，装 0.1.2-rc.1 就自动用旧补丁。
+
+> **dsh ≤0.1.1 用户**：`dsh-client-connection-0.1.1-rc.2.patch` 已随本仓库历史版本发布，
+> 当前 `apply-patches.sh` 的 TARGETS 只覆盖 `dsh-client-connection` + `dsh-api-gateway`
+> 两个包，且 0.1.1 时代 `api-gateway` 尚未成为独立包(无对应 patch)，故 ≤0.1.1 请用
+> 历史版本的脚本与 patches/(仅 client-connection 单包)。
 
 ### ★ dsh 0.1.2+ 升级特别注意:BrowserAuth / token 401
 
@@ -127,8 +156,18 @@ python3 tools/check-privileged-sync.py \
 
 ### 补丁不匹配
 
-若 `apply-patches.sh` 报 `补丁不匹配` 或产生 `.rej` 文件，说明上游代码已漂移，
+若 `apply-patches.sh` 报 `✗ 没有对应版本的补丁` 或产生 `.rej` 文件，说明上游代码已漂移，
 需 rebase 补丁。见下方「补丁 Rebase」章节。
+
+当前 `patches/` 目录已为以下版本提供补丁：
+
+| 包 | 已支持版本 |
+|---|---|
+| `dsh-api-gateway` | `0.1.2-rc.1`、`0.1.5-rc.2` |
+| `dsh-client-connection` | `0.1.1-rc.2`(历史)、`0.1.2-rc.1`、`0.1.5-rc.2` |
+
+> 装了以上未列出的版本(如 0.1.3-rc.x)时，`apply-patches.sh` 会报「没有对应版本的补丁」。
+> 此时按下方「补丁 Rebase」章节用 `diff -u` 生成新补丁，或把对应包降到已支持版本。
 
 ---
 

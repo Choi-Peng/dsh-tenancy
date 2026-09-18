@@ -1,0 +1,29 @@
+--- a/lib/client.js
++++ b/lib/client.js
+@@ -4752,7 +4752,7 @@
+ 				publishState(void 0);
+ 			};
+ 			const handle = {
+-				isLoopback: transport?.ownsHost === true || pageLocation === void 0 || isLoopbackHostname(pageLocation.hostname),
++				isLoopback: transport?.ownsHost === true || pageLocation === void 0 || isLoopbackHostname(pageLocation.hostname) || /* [dsh-tenancy P5] 域名入口管理放行:同步问一次 /tenancy/whoami,仅 tenancy 报告 admin(即 Authelia 组含 dsh-admins)才视为可信;tenancy 未装/非 admin/请求失败一律 fail-closed,成员行为不变 */ (() => { try { if (typeof XMLHttpRequest === "undefined") return false; const xhr = new XMLHttpRequest(); xhr.open("GET", "/tenancy/whoami", false); xhr.send(null); return xhr.status === 200 && JSON.parse(xhr.responseText).admin === true; } catch { return false; } })(),
+ 				generation: {
+ 					getSnapshot: () => generation,
+ 					subscribe: (listener) => {
+--- a/lib/index.js
++++ b/lib/index.js
+@@ -529,10 +529,16 @@
+ 	/** Apply the configured Host/Origin fence, then browser authentication. */
+ 	requestRejection(request) {
+ 		if (!isTrustedApiRequest(request, this.trustedHosts)) return 403;
++		// [dsh-tenancy P5b] 经 Caddy/Authelia 进来的流量已由 X-Dsh-Tenancy-Key 头证明身份
++		// (该头仅 Caddy 在 upstream 请求上无条件注入,终端浏览器无法伪造),无需 dsh 的
++		// browser-session cookie 即视为已认证;直连(无此头)仍走 BrowserAuth 401。
++		if (header(request.headers, "x-dsh-tenancy-key")) return void 0;
+ 		return this.browserAuth.isAuthenticated(request) ? void 0 : 401;
+ 	}
+ 	/** Authenticate an index request through the process-token exchange or cookie. */
+ 	authorizeIndex(request, response) {
++		// [dsh-tenancy P5b] 首屏经代理(带共享密钥头)直接放行 index.html;其余仍走 BrowserAuth。
++		if (header(request.headers, "x-dsh-tenancy-key")) return true;
+ 		return this.browserAuth.authorizeIndex(request, response);
+ 	}

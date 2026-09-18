@@ -3,6 +3,49 @@
 > [!NOTE]
 > 本文档由 AI 生成,可能存在错误或遗漏,使用前请 review。
 
+## 2026-09-18(五)
+
+### 客户端:用户中心入口改回固定顶部居中 + 设置内浮动开关
+
+- `lib/client.js` `UserCenter`:入口圆片不再默认浮动。默认渲染为
+  `position:fixed; top:12px; left:50%; transform:translateX(-50%)`,即固定在 body
+  顶部居中,与挂载点(`sidebar.footer.action`)无关;面板同轴居中在其下方
+  (`top:54px`)。固定态单击开合,不再挂载拖拽处理器。
+- 新增「浮动入口」开关(设置 → 插件 → 多租户 卡片内,默认 **关闭**):
+  关闭 = 固定顶部居中;开启后才恢复按下拖动入口/面板的能力,位置写入
+  `localStorage['tenancy.uc.pos']`,开关状态写入 `localStorage['tenancy.uc.float']`。
+  开关经模块级订阅(`useUcFloat`)广播,改动即时反映到入口,无需刷新。
+- 顺带修复拖拽数学里的既有缺陷:`panelPosFromPill` 与面板拖拽把
+  `window.innerHeight` 当作面板高度传给 `clampPos`,导致 `maxY` 恒为 0,
+  一旦有持久化坐标面板就被钉在 `top:0`。改用面板高度估值 `UC_PANEL_EST_H`。
+- 验证:用极简 React 替身渲染 `lib/client.js` 三个场景(固定 / 浮动+旧坐标 /
+  浮动无坐标),断言圆片与面板定位样式、拖拽处理器挂载与开关 `aria-checked`
+  均符合预期;`node --check lib/client.js` 通过。
+- 生效方式:刷新页面即可(客户端模块 URL 带 mtime rev,无需重启 dsh-web)。
+
+### 适配:dsh@0.1.5-rc.2 核心包架构重组
+
+dsh 0.1.5-rc.2 把 `RemoteStreamMuxConnection`(WebSocket 流多路复用)从
+`dsh-client-connection` **迁移到** `dsh-api-gateway`，同时移除了
+`dsh-client-connection` 里的下行帧 `pump(socket, frames, abort)`(+ `filterFrame`
+钩子)。原有补丁按旧版文件路径/行号写，直接跑会 `.rej`。本次适配：
+
+- **新增** `patches/dsh-api-gateway-0.1.5-rc.2.patch`：P2 流开闸/事件帧过滤。
+  `RemoteStreamMuxConnection` 在新旧版中代码未变，补丁内容与
+  `dsh-api-gateway-0.1.2-rc.1.patch` 完全相同(实测 `patch --forward` 直接通过，
+  语法 `node --check` OK，`__dshTenancy` 标记 3 处写入)。
+- **新增** `patches/dsh-client-connection-0.1.5-rc.2.patch`：P5 域名入口 whoami 放行
+  + P5b `X-Dsh-Tenancy-Key` 旁路。内容与 `dsh-client-connection-0.1.2-rc.1.patch`
+  相同；行号有 23 行偏移但 `patch --forward` 自动适配(fuzz 1)，语法检查 OK，
+  `dsh-tenancy P5b` 标记 2 处写入。
+- **删除** `patches/dsh-client-connection-0.1.1-rc.2.patch`：其两个 hunk
+  (`pump`/`filterFrame`、无 `transport?.ownsHost` 的 `isLoopback`)在 0.1.5-rc.2
+  中已不存在，实测 `patch --forward` 两个 hunk 均 FAILED。旧版 ≤0.1.1 用户请用
+  历史版本脚本。
+- `apply-patches.sh` **无需修改**：版本通配匹配(读 `package.json` 的
+  `version` → 找 `patches/<pkg>-<VERSION>.patch`)已自动覆盖新版本。
+- 回归验证：`scripts/selftest.mjs` 全量 203/0(`--skip-slow`)。
+
 ## 2026-09-17(四)
 
 ### 修复:应答 agent 提问必定 403 → 前端「connection lost, retry #1」且提问永久挂起(P14)
