@@ -81,7 +81,7 @@ sudo bash install.sh --domain dsh.example.com
 7. **邀请码注册** — 管理员生成一次性邀请码，新成员通过 `/register` 自助注册
 8. **审计日志** — `$DSH_HOME/tenancy/audit.log`（JSONL，5MB 轮转）记录门控拒绝、
     ACL 变更等
-9. **公开站点（P11）** — 独立端口匿名静态发布：把公开域名（如 `pub.example.com`）
+9. **公开站点** — 独立端口匿名静态发布：把公开域名（如 `pub.example.com`）
     经 nginx/Caddy 转发到 `127.0.0.1:3089`，则
     `pub.example.com/<user>/<projectName>` 直接公开个人工作区里构建好的项目
     （`~/dsh/<user>/<projectName>/dist`，构建输出目录名可配）。无鉴权、只读，
@@ -91,15 +91,15 @@ sudo bash install.sh --domain dsh.example.com
     （`skills/publish-web-app.md`）：DSH agent 编写/构建 Web 应用时自动遵循
     「产物放 `<项目>/dist/`、资源相对引用」的约定，含最简单免构建单
     `index.html` 的写法；该文件也可直接拷入 `~/.dsh/skills/` 使用
-11. **系统用户开通（P12）** — 新成员注册成功即创建**同名 Linux 系统用户**：
+11. **系统用户开通** — 新成员注册成功即创建**同名 Linux 系统用户**：
     `nologin` shell + 无密码（shadow 固有锁定）+ 不进任何管理组 ⇒ **不可登录服务器**；
     其唯一文件权限是个人工作区 `~/dsh/<user>`（dsh 以 root 运行时即
     `/root/dsh/<user>`）：递归 chown + 目录 0700。幂等可重放；同名既有系统账号
     不符时判 conflict 不接管；存量成员可经 `POST /tenancy/sysuser` 补建
-12. **工作区共享（P9 + P13 深化）** — owner/admin 在侧栏把工作区「共享」给成员
+12. **工作区共享** — owner/admin 在侧栏把工作区「共享」给成员
     （`/tenancy/workspaces/<id>/share` + UI 对话框）：共享用户在侧栏可见该工作区、
     可在其中新建会话（agent 真实读写同一份文件），并可在共享工作区**浏览文件树/
-    建目录**（P13 放开，非共享路径仍钳回个人根）。共享工作区内**新建的会话默认
+    建目录**（非共享路径仍钳回个人根）。共享工作区内**新建的会话默认
     对参与者（owner+共享用户）可读**——共享前已建的会话保持私有、不追溯，owner
     可随时把任意会话改回私有；写仍仅限 owner
 
@@ -145,7 +145,7 @@ systemctl restart authelia
 - 初始凭据由 `install.sh` 生成至 `/root/dsh-p0-credentials/`（chmod 700），
   登录后尽快改密
 
-### 系统用户(P12)
+### 系统用户
 
 注册成功时自动 `useradd -M -s /usr/sbin/nologin` 建同名账号(无密码、不进管理组
 ⇒ 不可登录),并把 `~/dsh/<user>` 递归 chown 给它、目录 0700。相关操作:
